@@ -30,7 +30,7 @@ VERIFY_TOKEN = os.environ["WHATSAPP_VERIFY_TOKEN"]
 # Mapeo temporal número -> nombre de técnico para el piloto (2-3 personas).
 # En producción esto debe salir de una tabla "technicians", no de un dict fijo.
 TECNICOS = {
-    "526182692461": "Miguel Abraham Lopez Ortiz"
+    "+526182692461": "Miguel Abraham Lopez Ortiz",
     
 }
 
@@ -52,7 +52,11 @@ async def receive(request: Request):
         if "messages" not in entry:
             return {"status": "ignored"}  # son eventos de "status" (entregado/leído), no mensajes
         msg = entry["messages"][0]
-        from_number = msg["from"]
+        # Usamos wa_id (no "from") como identificador: en algunos países (México incluido)
+        # "from" puede traer un dígito extra que NO coincide con el formato que Meta usa
+        # en la lista de destinatarios autorizados ni para enviar respuestas. "wa_id" sí.
+        contacts = entry.get("contacts", [])
+        from_number = contacts[0]["wa_id"] if contacts else msg["from"]
         texto = msg.get("text", {}).get("body", "")
     except (KeyError, IndexError):
         return {"status": "ignored"}
