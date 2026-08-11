@@ -33,6 +33,7 @@ async def telegram_webhook(request: Request):
     if WEBHOOK_SECRET:
         header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
         if header != WEBHOOK_SECRET:
+            print(f"[telegram] secret_token no coincide. Recibido={header!r}")
             return {"status": "forbidden"}
 
     update = await request.json()
