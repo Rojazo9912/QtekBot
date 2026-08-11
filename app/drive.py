@@ -74,15 +74,23 @@ def upload_photo(contenido: bytes, nombre_archivo: str, mime_type: str = "image/
 
 
     media = MediaIoBaseUpload(io.BytesIO(contenido), mimetype=mime_type, resumable=False)
-    archivo = service.files().create(body=metadata, media_body=media, fields="id, webViewLink").execute()
+    archivo = service.files().create(
+        body=metadata,
+        media_body=media,
+        fields="id, webViewLink",
+        supportsAllDrives=True,
+    ).execute()
 
     # Intentamos hacerla visible por enlace. Si las políticas del dominio de la cuenta lo impiden, no rompemos el proceso.
     try:
         service.permissions().create(
-            fileId=archivo["id"], body={"type": "anyone", "role": "reader"}
+            fileId=archivo["id"],
+            body={"type": "anyone", "role": "reader"},
+            supportsAllDrives=True,
         ).execute()
     except Exception as pe:
         print(f"[drive] Aviso: No se pudo asignar permiso público 'anyone' ({pe}). El archivo igual se subió en Drive: {archivo.get('webViewLink')}")
 
     return archivo.get("webViewLink", f"https://drive.google.com/file/d/{archivo['id']}/view")
+
 

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import telegram_client as tg
-from app import sheets, drive
+from app import sheets
 from app.bot_logic import procesar_mensaje_web
 from app.state import get_estado
 
@@ -105,6 +105,9 @@ def _manejar_seleccion_tecnico(callback_query: dict):
 
 
 def _manejar_foto(message: dict):
+    """Guarda el link directo de la foto/documento de Telegram como evidencia en el Sheet.
+    No sube el archivo a ningún storage externo — usa el CDN de Telegram directamente.
+    """
     chat_id = message["chat"]["id"]
     tecnico = SESIONES.get(chat_id)
     if not tecnico:
@@ -116,36 +119,26 @@ def _manejar_foto(message: dict):
         tg.send_text(chat_id, "No tienes ninguna actividad activa a la cual adjuntar esta evidencia. Inicia o reanuda una actividad primero.")
         return
 
-    tg.send_text(chat_id, "Subiendo evidencia a Google Drive…", con_teclado=False)
+    tg.send_text(chat_id, "Guardando evidencia…", con_teclado=False)
     try:
-        mime_type = "image/jpeg"
         if "photo" in message:
             file_id = message["photo"][-1]["file_id"]
-            extension = "jpg"
         elif "document" in message:
-            doc = message["document"]
-            file_id = doc["file_id"]
-            mime_type = doc.get("mime_type", "application/octet-stream")
-            file_name = doc.get("file_name", "archivo.jpg")
-            extension = file_name.split(".")[-1] if "." in file_name else "bin"
+            file_id = message["document"]["file_id"]
         else:
             tg.send_text(chat_id, "Tipo de archivo no soportado como evidencia.")
             return
 
-        contenido, file_path = tg.descargar_archivo(file_id)
-        file_suffix = file_path.split('/')[-1] if '/' in file_path else f"evidencia.{extension}"
-        nombre_archivo = f"{estado.folio_activo}_{file_suffix}"
-        
-        link = drive.upload_photo(contenido, nombre_archivo, mime_type=mime_type)
+        link = tg.get_file_url(file_id)
         guardado = sheets.add_evidence(estado.folio_activo, link)
-        
+
         if guardado:
-            tg.send_text(chat_id, f"Evidencia guardada exitosamente en la actividad {estado.folio_activo}. ✅\nEnlace: {link}")
+            tg.send_text(chat_id, f"Evidencia registrada en la actividad {estado.folio_activo}. ✅")
         else:
-            tg.send_text(chat_id, f"La foto se subió a Drive, pero no encontré la fila del folio {estado.folio_activo} en el Sheet para anexarla. Revísalo a mano: {link}")
+            tg.send_text(chat_id, f"No encontré la fila del folio {estado.folio_activo} en el Sheet para guardar la evidencia. Link: {link}")
     except Exception as e:
-        print(f"[evidencia] error subiendo evidencia: {e}")
-        tg.send_text(chat_id, f"No pude subir la evidencia. Ocurrió un error: {e}")
+        print(f"[evidencia] error guardando evidencia: {e}")
+        tg.send_text(chat_id, f"No pude guardar la evidencia. Error: {e}")
 
 
 

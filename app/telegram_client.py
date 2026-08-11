@@ -74,6 +74,18 @@ def set_webhook(url: str) -> dict:
         return r.json()
 
 
+def get_file_url(file_id: str) -> str:
+    """Obtiene el link directo de descarga del archivo desde los servidores de Telegram.
+    No descarga el contenido — solo resuelve la URL. Mucho más rápido que bajar y
+    re-subir la foto a Drive. El link es válido mientras el bot tenga acceso al archivo.
+    """
+    with httpx.Client(timeout=10) as http:
+        r = http.get(f"{API_URL}/getFile", params={"file_id": file_id})
+        r.raise_for_status()
+        file_path = r.json()["result"]["file_path"]
+        return f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+
+
 def descargar_foto(file_id: str) -> tuple[bytes, str]:
     """Descarga una foto o archivo de Telegram. Regresa (contenido_en_bytes, file_path)."""
     return descargar_archivo(file_id)
@@ -89,4 +101,5 @@ def descargar_archivo(file_id: str) -> tuple[bytes, str]:
         r2 = http.get(file_url)
         r2.raise_for_status()
         return r2.content, file_path
+
 
