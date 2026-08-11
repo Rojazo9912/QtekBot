@@ -4,7 +4,12 @@ Escritura a Google Sheets — reemplaza al Excel manual.
 Requiere:
 - Una cuenta de servicio de Google Cloud con la API de Sheets habilitada.
 - El Google Sheet compartido como Editor con el email de esa cuenta de servicio.
-- El JSON de credenciales guardado en la ruta indicada por GOOGLE_CREDENTIALS_PATH.
+- Las credenciales de esa cuenta de servicio, en UNA de estas dos formas:
+    a) GOOGLE_CREDENTIALS_JSON: el contenido completo del archivo JSON, pegado tal
+       cual como valor de una variable de entorno. Úsalo en Railway — así el JSON
+       nunca toca el repo de GitHub.
+    b) GOOGLE_CREDENTIALS_PATH: ruta a un archivo credentials.json en disco. Útil
+       solo para correr el bot en tu máquina durante desarrollo local.
 
 Estructura esperada de la hoja "Actividades" (fila 1 = encabezados):
 Folio | Ticket | Técnico | Fecha | Hora Apertura | Hora Pausa | Hora Reanudación |
@@ -21,8 +26,27 @@ from google.oauth2.service_account import Credentials
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
+CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 CREDENTIALS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 WORKSHEET_NAME = os.environ.get("GOOGLE_WORKSHEET_NAME", "Actividades")
+
+
+def _load_credentials() -> Credentials:
+    if CREDENTIALS_JSON:
+        try:
+            info = json.loads(CREDENTIALS_JSON)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                "GOOGLE_CREDENTIALS_JSON no es un JSON válido. Asegúrate de haber "
+                "pegado el contenido completo del archivo, sin recortar ni escapar nada."
+            ) from e
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
+    if os.path.exists(CREDENTIALS_PATH):
+        return Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+    raise RuntimeError(
+        "No hay credenciales de Google configuradas. Define GOOGLE_CREDENTIALS_JSON "
+        "(recomendado en Railway) o GOOGLE_CREDENTIALS_PATH (solo desarrollo local)."
+    )
 
 HEADERS = [
     "Folio", "Ticket", "Técnico", "Fecha", "Hora Apertura", "Hora Pausa",
@@ -38,23 +62,7 @@ def _get_worksheet():
     global _client, _worksheet
     if _worksheet is not None:
         return _worksheet
-    
-    # Intenta cargar desde variable de entorno GOOGLE_CREDENTIALS_JSON primero (útil para Railway)
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if creds_json:
-        try:
-            info = json.loads(creds_json)
-            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-        except Exception as e:
-            print(f"[sheets] Error cargando GOOGLE_CREDENTIALS_JSON: {e}")
-            creds = None
-    else:
-        creds = None
-
-    if creds is None:
-        # Fallback al archivo físico credentials.json
-        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
-
+    creds = _load_credentials()
     _client = gspread.authorize(creds)
     sh = _client.open_by_key(SHEET_ID)
     try:

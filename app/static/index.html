@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>FieldTI · Registro de actividad</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="pantalla-login" class="pantalla">
+    <div class="login-card">
+      <div class="marca">
+        <span class="marca-icono">◍</span>
+        <span class="marca-texto">FieldTI</span>
+      </div>
+      <p class="login-sub">Elige tu nombre para empezar a registrar.</p>
+      <div id="lista-tecnicos" class="lista-tecnicos"></div>
+    </div>
+  </div>
+
+  <div id="pantalla-chat" class="pantalla oculto">
+    <header class="chat-header">
+      <button id="btn-cambiar" class="btn-icono" title="Cambiar de técnico">←</button>
+      <div class="chat-header-info">
+        <span class="chat-header-nombre" id="nombre-actual"></span>
+        <span class="chat-header-estado">Reporte diario · en vivo</span>
+      </div>
+    </header>
+
+    <main id="mensajes" class="mensajes"></main>
+
+    <div class="acciones-rapidas" id="acciones-rapidas">
+      <button class="chip" data-texto="nueva actividad">+ Nueva actividad</button>
+      <button class="chip" data-texto="pausar">⏸ Pausar</button>
+      <button class="chip" data-texto="reanudar">▶ Reanudar</button>
+      <button class="chip" data-texto="finalizar">✓ Finalizar</button>
+      <button class="chip" data-texto="mis actividades">☰ Mis actividades</button>
+    </div>
+
+    <form id="form-mensaje" class="entrada">
+      <input id="input-texto" type="text" placeholder="Escribe aquí, como en WhatsApp…" autocomplete="off">
+      <button type="submit" class="btn-enviar" aria-label="Enviar">➤</button>
+    </form>
+  </div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
