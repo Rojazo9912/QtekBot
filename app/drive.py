@@ -45,6 +45,16 @@ def _get_service():
     return _drive_service
 
 
+def _get_folder_id() -> str:
+    raw = os.environ.get("DRIVE_FOLDER_ID", "").strip()
+    if not raw:
+        return ""
+    if "/folders/" in raw:
+        # Extrae el ID si se pegó la URL completa de Google Drive
+        raw = raw.split("/folders/")[-1].split("?")[0].split("/")[0].strip()
+    return raw
+
+
 def upload_photo(contenido: bytes, nombre_archivo: str, mime_type: str = "image/jpeg") -> str:
     """Sube una foto o archivo a Drive y regresa el link para verla (webViewLink)."""
     service = _get_service()
@@ -55,11 +65,13 @@ def upload_photo(contenido: bytes, nombre_archivo: str, mime_type: str = "image/
         if guessed_type:
             mime_type = guessed_type
 
+    folder_id = _get_folder_id()
     metadata = {"name": nombre_archivo}
-    if DRIVE_FOLDER_ID:
-        metadata["parents"] = [DRIVE_FOLDER_ID]
+    if folder_id:
+        metadata["parents"] = [folder_id]
     else:
         print("[drive] AVISO: DRIVE_FOLDER_ID no está configurado. La foto se subirá al directorio raíz de la cuenta de servicio.")
+
 
     media = MediaIoBaseUpload(io.BytesIO(contenido), mimetype=mime_type, resumable=False)
     archivo = service.files().create(body=metadata, media_body=media, fields="id, webViewLink").execute()
