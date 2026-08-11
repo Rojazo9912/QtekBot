@@ -4,6 +4,7 @@ Piloto FieldTI AI — Bot de Telegram + Web App para registro de actividades en 
 Punto de entrada principal para Railway y desarrollo local.
 Comando de inicio: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 """
+import datetime as dt
 import os
 from pathlib import Path
 from fastapi import FastAPI, Request
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 from app import telegram_client as tg
 from app import sheets, storage
 from app.bot_logic import procesar_mensaje_web
+from app.config import CATALOGO_PRIORIDAD, CATALOGO_TIPO_FALLA, TECNICOS
 from app.state import get_estado
 
 app = FastAPI(title="FieldTI AI - Telegram Bot")
@@ -22,13 +24,18 @@ STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Mismo piloto de 2-3 técnicos. Cámbialo por los nombres reales de tu equipo.
-TECNICOS = ["Miguel Abraham Lopez Ortiz"]
-
 # chat_id de Telegram -> nombre de técnico. En memoria (ver aviso en app/state.py)
 SESIONES: dict[int, str] = {}
 
 WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
+REPORTE_ADMIN_SECRET = os.environ.get("REPORTE_ADMIN_SECRET")
+
+# Pasos de la conversación en los que el bot ofrece un catálogo fijo de
+# opciones (en vez del teclado persistente de atajos).
+CATALOGOS_POR_ESTADO = {
+    "tipo_falla": CATALOGO_TIPO_FALLA,
+    "prioridad": CATALOGO_PRIORIDAD,
+}
 
 
 @app.get("/")
@@ -54,6 +61,36 @@ class MensajeIn(BaseModel):
 @app.get("/api/tecnicos")
 def listar_tecnicos():
     return {"tecnicos": TECNICOS}
+
+
+@app.get("/api/reporte-semanal")
+def generar_reporte_semanal(secret: str = "", desde: str = "", hasta: str = ""):
+    """Reconstruye las pestañas 'Resumen Semanal' y 'Reporte Semanal' a partir
+    de lo capturado en 'Reporte Diario'. Pensado para que un admin de Qtek lo
+    dispare a mano (pegando la URL en el navegador) antes de mandar el
+    reporte semanal a First Majestic — no se llama desde el chat.
+
+    Sin `desde`/`hasta` (formato YYYY-MM-DD), usa la semana calendario actual
+    (lunes a domingo). Protegido con REPORTE_ADMIN_SECRET porque reescribe
+    esas dos pestañas por completo.
+    """
+    if REPORTE_ADMIN_SECRET and secret != REPORTE_ADMIN_SECRET:
+        return JSONResponse(status_code=403, content={"status": "forbidden"})
+    try:
+        if desde and hasta:
+            fecha_inicio = dt.date.fromisoformat(desde)
+            fecha_fin = dt.date.fromisoformat(hasta)
+        else:
+            hoy = dt.datetime.now(sheets.ZONA_HORARIA).date()
+            fecha_inicio = hoy - dt.timedelta(days=hoy.weekday())
+            fecha_fin = fecha_inicio + dt.timedelta(days=6)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detalle": "Fechas inválidas. Usa formato YYYY-MM-DD."},
+        )
+    resumen = sheets.generar_reporte_semanal(fecha_inicio, fecha_fin)
+    return {"status": "ok", **resumen}
 
 
 @app.post("/api/chat")
@@ -167,6 +204,15 @@ def _manejar_mensaje(message: dict):
 
     texto_normalizado = tg.normalizar_texto_boton(texto)
     respuestas = procesar_mensaje_web(tecnico, texto_normalizado)
-    for r in respuestas:
+    if not respuestas:
+        return
+
+    for r in respuestas[:-1]:
         tg.send_text(chat_id, r)
+
+    opciones = CATALOGOS_POR_ESTADO.get(get_estado(tecnico).esperando)
+    if opciones:
+        tg.send_opciones(chat_id, respuestas[-1], opciones)
+    else:
+        tg.send_text(chat_id, respuestas[-1])
 

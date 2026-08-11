@@ -6,7 +6,28 @@ como para la web app.
 """
 from app import sheets
 from app.ai_extract import interpretar_mensaje
+from app.config import CATALOGO_PRIORIDAD, CATALOGO_TIPO_FALLA
 from app.state import get_estado
+
+_SIN_DATO = ("no", "ninguna", "ninguno", "n/a", "na")
+
+
+def _prompt_tipo_falla() -> str:
+    return "¿Qué tipo de falla es? Elige una opción:\n" + "\n".join(CATALOGO_TIPO_FALLA)
+
+
+def _prompt_prioridad() -> str:
+    return "¿Qué prioridad tiene? Elige una opción:\n" + "\n".join(CATALOGO_PRIORIDAD)
+
+
+def _match_catalogo(texto: str, catalogo: list[str]) -> str | None:
+    """Compara sin importar mayúsculas/acentos exactos; regresa el valor
+    canónico del catálogo o None si no hay coincidencia."""
+    texto_norm = texto.strip().lower()
+    for opcion in catalogo:
+        if opcion.lower() == texto_norm:
+            return opcion
+    return None
 
 
 def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
@@ -23,6 +44,24 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         return respuestas
     if estado.esperando == "numero_ticket":
         estado.borrador["ticket"] = texto.strip()
+        estado.esperando = "tipo_falla"
+        decir(_prompt_tipo_falla())
+        return respuestas
+    if estado.esperando == "tipo_falla":
+        valor = _match_catalogo(texto, CATALOGO_TIPO_FALLA)
+        if not valor:
+            decir("No reconozco esa opción.\n" + _prompt_tipo_falla())
+            return respuestas
+        estado.borrador["tipo_falla"] = valor
+        estado.esperando = "prioridad"
+        decir(_prompt_prioridad())
+        return respuestas
+    if estado.esperando == "prioridad":
+        valor = _match_catalogo(texto, CATALOGO_PRIORIDAD)
+        if not valor:
+            decir("No reconozco esa opción.\n" + _prompt_prioridad())
+            return respuestas
+        estado.borrador["prioridad"] = valor
         estado.esperando = "problema"
         decir("Descríbeme brevemente el problema o la actividad.")
         return respuestas
@@ -38,6 +77,8 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             ticket=estado.borrador.get("ticket"),
             area=estado.borrador["area"],
             problema=estado.borrador["problema"],
+            tipo_falla=estado.borrador["tipo_falla"],
+            prioridad=estado.borrador["prioridad"],
         )
         estado.folio_activo = folio
         estado.esperando = None
@@ -54,12 +95,30 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         return respuestas
     if estado.esperando == "solucion":
         estado.borrador["solucion"] = texto.strip()
+        estado.esperando = "recomendaciones"
+        decir("¿Alguna recomendación para evitar que se repita? (o escribe 'ninguna')")
+        return respuestas
+    if estado.esperando == "recomendaciones":
+        valor = texto.strip()
+        estado.borrador["recomendaciones"] = "" if valor.lower() in _SIN_DATO else valor
+        estado.esperando = "materiales"
+        decir("¿Usaste algún material o repuesto? Escríbelos separados por coma, o 'no'.")
+        return respuestas
+    if estado.esperando == "materiales":
+        valor = texto.strip()
+        estado.borrador["materiales"] = "" if valor.lower() in _SIN_DATO else valor
         estado.esperando = "receptor"
         decir("¿Quién recibió el trabajo?")
         return respuestas
     if estado.esperando == "receptor":
         estado.borrador["receptor"] = texto.strip()
-        sheets.finish_activity(estado.folio_activo, estado.borrador["solucion"], estado.borrador["receptor"])
+        sheets.finish_activity(
+            estado.folio_activo,
+            solucion=estado.borrador["solucion"],
+            recomendaciones=estado.borrador.get("recomendaciones", ""),
+            receptor=estado.borrador["receptor"],
+            materiales=estado.borrador.get("materiales", ""),
+        )
         decir(f"Actividad {estado.folio_activo} finalizada. Buen trabajo.")
         estado.folio_activo = None
         estado.esperando = None
@@ -99,11 +158,11 @@ def _ejecutar_intencion(estado, intencion: str, decir):
 
     elif intencion == "reanudar":
         pendientes = sheets.list_open_activities(estado.nombre)
-        pausadas = [a for a in pendientes if a.get("Estado") == "Pausada"]
+        pausadas = [a for a in pendientes if a.get("_en_pausa")]
         if not pausadas:
             decir("No tienes actividades pausadas para reanudar.")
             return
-        folio = pausadas[0]["Folio"]
+        folio = pausadas[0]["Ticket"]
         sheets.resume_activity(folio)
         estado.folio_activo = folio
         decir(f"Actividad {folio} reanudada.")
@@ -120,7 +179,10 @@ def _ejecutar_intencion(estado, intencion: str, decir):
         if not pendientes:
             decir("No tienes actividades abiertas ni pausadas.")
         else:
-            lineas = [f"- {a['Folio']} ({a['Estado']}): {a['Problema']}" for a in pendientes]
+            lineas = [
+                f"- {a['Ticket']} ({'Pausada' if a.get('_en_pausa') else 'En proceso'}): {a['Tipo de Falla']}"
+                for a in pendientes
+            ]
             decir("Tus actividades pendientes:\n" + "\n".join(lineas))
 
     else:
@@ -134,8 +196,8 @@ def _procesar_ticket_si_no(estado, texto: str, decir):
         decir("Dame el número de ticket.")
     elif respuesta in ("no", "n"):
         estado.borrador["ticket"] = None
-        estado.esperando = "problema"
-        decir("Ok, se generará un folio interno. Descríbeme el problema o la actividad.")
+        estado.esperando = "tipo_falla"
+        decir("Ok, se generará un folio interno. " + _prompt_tipo_falla())
     else:
         decir("Responde solo 'sí' o 'no': ¿tiene ticket esta actividad?")
 

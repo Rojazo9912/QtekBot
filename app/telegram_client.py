@@ -46,6 +46,22 @@ def send_text(chat_id: int, texto: str, con_teclado: bool = True) -> None:
             print(f"[telegram] error {r.status_code}: {r.text}")
 
 
+def send_opciones(chat_id: int, texto: str, opciones: list[str]) -> None:
+    """Teclado de respuesta rápida, una opción por fila (catálogos fijos
+    como Tipo de Falla o Prioridad). Es de un solo uso: en cuanto el técnico
+    responde, Telegram lo reemplaza por el teclado persistente de atajos."""
+    teclado = {
+        "keyboard": [[{"text": o}] for o in opciones],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
+    payload = {"chat_id": chat_id, "text": texto, "reply_markup": teclado}
+    with httpx.Client(timeout=10) as http:
+        r = http.post(f"{API_URL}/sendMessage", json=payload)
+        if r.status_code >= 400:
+            print(f"[telegram] error {r.status_code}: {r.text}")
+
+
 def send_seleccion_tecnico(chat_id: int, nombres: list[str]) -> None:
     """Botones en línea (uno por técnico) para el /start."""
     teclado = {
