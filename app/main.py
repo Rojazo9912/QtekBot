@@ -17,6 +17,9 @@ NO cubre en este piloto (a propósito, para no inflar el alcance):
   por técnico, como en el ejemplo de la sección 6 del PRD.
 """
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request, Response
 
 from app import sheets, whatsapp
@@ -67,8 +70,14 @@ async def receive(request: Request):
         whatsapp.send_text(from_number, "Tu número no está registrado como técnico. Contacta a tu supervisor.")
         return {"status": "unregistered"}
 
-    manejar_mensaje(tecnico, from_number, texto)
+    try:
+        manejar_mensaje(tecnico, from_number, texto)
+    except Exception as e:
+        print(f"[Error del Bot] {e}")
+        whatsapp.send_text(from_number, "Lo siento, ocurrió un problema interno al procesar tu solicitud. Por favor intenta de nuevo más tarde.")
+        return {"status": "error"}
     return {"status": "ok"}
+
 
 
 def manejar_mensaje(tecnico: str, numero: str, texto: str):

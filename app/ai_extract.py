@@ -39,19 +39,21 @@ confirmará con el técnico antes de ejecutar nada.
 
 
 def interpretar_mensaje(texto: str) -> dict:
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": texto},
-        ],
-        temperature=0,
-        response_format={"type": "json_object"},
-    )
     try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": texto},
+            ],
+            temperature=0,
+            response_format={"type": "json_object"},
+        )
         return json.loads(resp.choices[0].message.content)
-    except (json.JSONDecodeError, IndexError):
+    except Exception as e:
+        print(f"[OpenAI Error] {e}")
         return {
             "intencion": "desconocido", "ticket": None, "problema": None,
             "solucion": None, "receptor": None, "confianza": "baja",
         }
+

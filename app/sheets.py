@@ -11,6 +11,7 @@ Folio | Ticket | Técnico | Fecha | Hora Apertura | Hora Pausa | Hora Reanudaci�
 Hora Finalizado | Estado | Área | Problema | Solución | Receptor | Evidencias
 """
 import os
+import json
 import datetime as dt
 from typing import Optional
 
@@ -37,7 +38,23 @@ def _get_worksheet():
     global _client, _worksheet
     if _worksheet is not None:
         return _worksheet
-    creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+    
+    # Intenta cargar desde variable de entorno GOOGLE_CREDENTIALS_JSON primero (útil para Railway)
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if creds_json:
+        try:
+            info = json.loads(creds_json)
+            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        except Exception as e:
+            print(f"[sheets] Error cargando GOOGLE_CREDENTIALS_JSON: {e}")
+            creds = None
+    else:
+        creds = None
+
+    if creds is None:
+        # Fallback al archivo físico credentials.json
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+
     _client = gspread.authorize(creds)
     sh = _client.open_by_key(SHEET_ID)
     try:
