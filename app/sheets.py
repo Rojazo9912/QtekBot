@@ -19,6 +19,7 @@ import os
 import json
 import datetime as dt
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -29,6 +30,16 @@ SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
 CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 CREDENTIALS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 WORKSHEET_NAME = os.environ.get("GOOGLE_WORKSHEET_NAME", "Actividades")
+
+# El servidor (Railway) corre en UTC. Sin esto, las horas guardadas quedan
+# desfasadas respecto a la hora real del técnico en campo (ej. 17:46 en vez
+# de 11:46). Cambia ZONA_HORARIA en Railway si tus técnicos no están en
+# horario de Ciudad de México/Durango (ambos son la misma zona: America/Mexico_City).
+ZONA_HORARIA = ZoneInfo(os.environ.get("ZONA_HORARIA", "America/Mexico_City"))
+
+
+def _ahora() -> dt.datetime:
+    return dt.datetime.now(ZONA_HORARIA)
 
 
 def _load_credentials() -> Credentials:
@@ -92,7 +103,7 @@ def start_activity(tecnico: str, ticket: Optional[str], area: str, problema: str
     """Crea una fila nueva. Devuelve el folio (o el ticket si existía)."""
     ws = _get_worksheet()
     folio = ticket if ticket else _next_folio()
-    now = dt.datetime.now()
+    now = _ahora()
     row = [
         folio, ticket or "", tecnico, now.strftime("%Y-%m-%d"),
         now.strftime("%H:%M:%S"), "", "", "", "En proceso", area, problema,
@@ -107,7 +118,7 @@ def pause_activity(folio: str) -> bool:
     if not row_idx:
         return False
     ws = _get_worksheet()
-    now = dt.datetime.now().strftime("%H:%M:%S")
+    now = _ahora().strftime("%H:%M:%S")
     ws.update_cell(row_idx, 6, now)          # Hora Pausa
     ws.update_cell(row_idx, 9, "Pausada")    # Estado
     return True
@@ -118,7 +129,7 @@ def resume_activity(folio: str) -> bool:
     if not row_idx:
         return False
     ws = _get_worksheet()
-    now = dt.datetime.now().strftime("%H:%M:%S")
+    now = _ahora().strftime("%H:%M:%S")
     ws.update_cell(row_idx, 7, now)             # Hora Reanudación
     ws.update_cell(row_idx, 9, "En proceso")    # Estado
     return True
@@ -129,11 +140,24 @@ def finish_activity(folio: str, solucion: str, receptor: str) -> bool:
     if not row_idx:
         return False
     ws = _get_worksheet()
-    now = dt.datetime.now().strftime("%H:%M:%S")
+    now = _ahora().strftime("%H:%M:%S")
     ws.update_cell(row_idx, 8, now)              # Hora Finalizado
     ws.update_cell(row_idx, 9, "Finalizada")     # Estado
     ws.update_cell(row_idx, 12, solucion)        # Solución
     ws.update_cell(row_idx, 13, receptor)        # Receptor
+    return True
+
+
+def add_evidence(folio: str, link: str) -> bool:
+    """Anexa un link de evidencia (foto en Drive) a la fila del folio. Si ya
+    había otro link, lo agrega en una línea nueva, no lo sobrescribe."""
+    row_idx = _find_row_by_folio(folio)
+    if not row_idx:
+        return False
+    ws = _get_worksheet()
+    actual = ws.cell(row_idx, 14).value or ""
+    nuevo = f"{actual}\n{link}".strip() if actual else link
+    ws.update_cell(row_idx, 14, nuevo)
     return True
 
 

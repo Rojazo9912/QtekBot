@@ -15,7 +15,9 @@ import os
 from fastapi import FastAPI, Request
 
 from app import telegram_client as tg
+from app import sheets, drive
 from app.bot_logic import procesar_mensaje_web
+from app.state import get_estado
 
 app = FastAPI()
 
@@ -43,7 +45,11 @@ async def telegram_webhook(request: Request):
         return {"status": "ok"}
 
     if "message" in update:
-        _manejar_mensaje(update["message"])
+        message = update["message"]
+        if "photo" in message:
+            _manejar_foto(message)
+        else:
+            _manejar_mensaje(message)
         return {"status": "ok"}
 
     return {"status": "ignored"}
@@ -61,6 +67,35 @@ def _manejar_seleccion_tecnico(callback_query: dict):
         return
     SESIONES[chat_id] = nombre
     tg.send_text(chat_id, f"Hola, {nombre.split(' ')[0]}. Usa los botones o escribe libremente.")
+
+
+def _manejar_foto(message: dict):
+    chat_id = message["chat"]["id"]
+    tecnico = SESIONES.get(chat_id)
+    if not tecnico:
+        tg.send_text(chat_id, "Primero manda /start para identificarte.", con_teclado=False)
+        return
+
+    estado = get_estado(tecnico)
+    if not estado.folio_activo:
+        tg.send_text(chat_id, "No tienes ninguna actividad activa a la cual adjuntar esta foto. Inicia o reanuda una actividad primero.")
+        return
+
+    tg.send_text(chat_id, "Subiendo evidencia…", con_teclado=False)
+    try:
+        # Telegram manda varios tamaños de la misma foto; usamos la más grande (última).
+        file_id = message["photo"][-1]["file_id"]
+        contenido, file_path = tg.descargar_foto(file_id)
+        nombre_archivo = f"{estado.folio_activo}_{file_path.split('/')[-1]}"
+        link = drive.upload_photo(contenido, nombre_archivo)
+        guardado = sheets.add_evidence(estado.folio_activo, link)
+        if guardado:
+            tg.send_text(chat_id, f"Evidencia guardada en la actividad {estado.folio_activo}. ✅")
+        else:
+            tg.send_text(chat_id, f"La foto se subió a Drive, pero no encontré la fila del folio {estado.folio_activo} en el Sheet para anexarla. Revísalo a mano: {link}")
+    except Exception as e:
+        print(f"[evidencia] error subiendo foto: {e}")
+        tg.send_text(chat_id, "No pude subir la evidencia. Intenta de nuevo en un momento; si sigue fallando, avísale a tu supervisor.")
 
 
 def _manejar_mensaje(message: dict):

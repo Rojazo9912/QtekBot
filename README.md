@@ -25,6 +25,26 @@ para un piloto con 2-3 técnicos (PRD, sección 23).
 - **Multi-actividad simultánea real:** el piloto asume una actividad activa a la vez por
   técnico (igual que el ejemplo de la sección 6 del PRD: pausas antes de iniciar otra).
 
+## Evidencias (fotos)
+
+Ya implementado para el canal de Telegram: si el técnico manda una foto
+mientras tiene una actividad activa, el bot la sube a Google Drive y guarda
+el link en la columna "Evidencias" de esa fila en el Sheet.
+
+**Setup adicional (una sola vez):**
+1. En Google Cloud Console, habilita también la **Google Drive API** (además
+   de la de Sheets que ya tenías).
+2. En tu Google Drive normal, crea una carpeta para las evidencias del piloto.
+3. Compártela como **Editor** con el mismo `client_email` de tu cuenta de
+   servicio (el mismo correo que ya usaste para el Sheet).
+4. Copia el ID de la carpeta de la URL (la parte después de `/folders/`) y
+   agrégalo en Railway como variable `DRIVE_FOLDER_ID`.
+
+**Nota de privacidad:** las fotos quedan con permiso "cualquiera con el link
+puede ver" — no aparecen en buscadores, pero tampoco están restringidas a
+personas específicas. Es lo más simple para que el link funcione directo
+desde el Sheet sin pedir login.
+
 ## Tres formas de usar el piloto
 
 Este proyecto tiene TRES canales de entrada que comparten exactamente la
