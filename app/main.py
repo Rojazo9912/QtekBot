@@ -31,7 +31,6 @@ VERIFY_TOKEN = os.environ["WHATSAPP_VERIFY_TOKEN"]
 # En producción esto debe salir de una tabla "technicians", no de un dict fijo.
 TECNICOS = {
     "526182692461": "Miguel Abraham Lopez Ortiz"
-    
 }
 
 
@@ -58,6 +57,8 @@ async def receive(request: Request):
         contacts = entry.get("contacts", [])
         from_number = contacts[0]["wa_id"] if contacts else msg["from"]
         texto = msg.get("text", {}).get("body", "")
+        # DIAGNÓSTICO TEMPORAL: para ver el formato exacto del número que Meta está mandando.
+        print(f"[diagnostico] from(msg)={msg.get('from')!r}  wa_id(contacts)={contacts[0].get('wa_id') if contacts else None!r}  usando={from_number!r}  registrado_en_TECNICOS={from_number in TECNICOS}")
     except (KeyError, IndexError):
         return {"status": "ignored"}
 
