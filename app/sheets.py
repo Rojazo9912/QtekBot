@@ -361,7 +361,47 @@ def add_evidence(
         for col in COL_FOTOS:
             if not ws.cell(row_idx, col).value:
                 ws.update_cell(row_idx, col, f'=IMAGE("{url_formula}", 4, {TAMANO_FOTO_PX}, {TAMANO_FOTO_PX})')
+                _ajustar_dimensiones_foto(ws, row_idx)
                 break
+
+    return True
+
+
+def _ajustar_dimensiones_foto(ws, row_idx: int) -> None:
+    """=IMAGE(url, 4, alto, ancho) dibuja la miniatura a tamaño fijo, pero
+    Sheets NO ensancha solo la columna/fila — si la celda está en su tamaño
+    default (angosto y bajo), la miniatura se ve recortada/diminuta aunque
+    la fórmula pida 260x260. Forzamos aquí el ancho de las columnas Foto 1-3
+    y el alto de la fila con la foto nueva para que se vea completa."""
+    tamano = TAMANO_FOTO_PX + 20
+    sheet_id = ws.id
+    requests = [
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": min(COL_FOTOS) - 1,
+                    "endIndex": max(COL_FOTOS),
+                },
+                "properties": {"pixelSize": tamano},
+                "fields": "pixelSize",
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": row_idx - 1,
+                    "endIndex": row_idx,
+                },
+                "properties": {"pixelSize": tamano},
+                "fields": "pixelSize",
+            }
+        },
+    ]
+    ws.spreadsheet.batch_update({"requests": requests})
 
     return True
 
