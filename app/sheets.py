@@ -333,12 +333,20 @@ def finish_activity(
     return True
 
 
-def add_evidence(folio: str, link: str, mime_type: str = "image/jpeg") -> bool:
+def add_evidence(
+    folio: str, link: str, mime_type: str = "image/jpeg",
+    link_miniatura: Optional[str] = None,
+) -> bool:
     """Anexa un link de evidencia a la fila del folio (columna Evidencias, texto
-    completo como respaldo). Si además es una imagen y hay un hueco libre entre
-    las columnas Foto 1-3, escribe ahí una miniatura con =IMAGE() para verla
-    directo en el Sheet. A partir de la 4a foto (o si no es imagen), solo queda
-    el link en texto."""
+    completo como respaldo — siempre `link`, la URL directa de Supabase, para
+    que el registro sobreviva aunque cambie cómo servimos las miniaturas).
+
+    Si además es una imagen y hay un hueco libre entre las columnas Foto 1-3,
+    escribe ahí una miniatura con =IMAGE(). Para esa fórmula usa
+    `link_miniatura` si se lo pasan (pensado para una URL propia, sin el
+    header X-Robots-Tag que trae Supabase Storage y que hace que =IMAGE() no
+    renderice) y si no, cae en `link`. A partir de la 4a foto (o si no es
+    imagen), solo queda el link en texto."""
     row_idx = _find_row_by_folio(folio)
     if not row_idx:
         return False
@@ -349,9 +357,10 @@ def add_evidence(folio: str, link: str, mime_type: str = "image/jpeg") -> bool:
     ws.update_cell(row_idx, COL_EVIDENCIAS, nuevo)
 
     if mime_type.startswith("image/"):
+        url_formula = link_miniatura or link
         for col in COL_FOTOS:
             if not ws.cell(row_idx, col).value:
-                ws.update_cell(row_idx, col, f'=IMAGE("{link}", 4, {TAMANO_FOTO_PX}, {TAMANO_FOTO_PX})')
+                ws.update_cell(row_idx, col, f'=IMAGE("{url_formula}", 4, {TAMANO_FOTO_PX}, {TAMANO_FOTO_PX})')
                 break
 
     return True

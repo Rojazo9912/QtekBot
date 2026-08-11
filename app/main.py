@@ -7,7 +7,7 @@ Comando de inicio: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 import datetime as dt
 import os
 from pathlib import Path
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -29,6 +29,11 @@ SESIONES: dict[int, str] = {}
 
 WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
 REPORTE_ADMIN_SECRET = os.environ.get("REPORTE_ADMIN_SECRET")
+
+# URL pública de este servicio (la misma que usas para el webhook de
+# Telegram, ej. https://tu-app.up.railway.app). Sirve para armar el link de
+# /evidencia/ que usan las miniaturas =IMAGE() del Sheet — ver _manejar_foto.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
 # Pasos de la conversación en los que el bot ofrece un catálogo fijo de
 # opciones (en vez del teclado persistente de atajos).
@@ -61,6 +66,22 @@ class MensajeIn(BaseModel):
 @app.get("/api/tecnicos")
 def listar_tecnicos():
     return {"tecnicos": TECNICOS}
+
+
+@app.get("/evidencia/{ruta:path}")
+def servir_evidencia(ruta: str):
+    """Re-sirve un archivo de Supabase Storage sin el header X-Robots-Tag que
+    Supabase agrega por default: ese header es respetado por el fetcher de
+    imágenes de Google Sheets (=IMAGE()) y hace que la miniatura no
+    renderice, aunque la URL directa de Supabase funcione bien en el
+    navegador. Solo se usa para las miniaturas del Sheet — el link "de
+    verdad" que se guarda en la columna Evidencias sigue siendo la URL
+    directa de Supabase."""
+    try:
+        contenido, mime_type = storage.download_evidence(ruta)
+    except Exception:
+        return JSONResponse(status_code=404, content={"status": "not_found"})
+    return Response(content=contenido, media_type=mime_type)
 
 
 @app.get("/api/reporte-semanal")
@@ -173,7 +194,9 @@ def _manejar_foto(message: dict):
         nombre_archivo = f"{estado.folio_activo}_{file_path.split('/')[-1]}"
 
         url = storage.upload_evidence(contenido, nombre_archivo, mime_type=mime_type)
-        guardado = sheets.add_evidence(estado.folio_activo, url, mime_type=mime_type)
+        ruta = storage.ruta_normalizada(nombre_archivo)
+        url_miniatura = f"{PUBLIC_BASE_URL}/evidencia/{ruta}" if PUBLIC_BASE_URL else None
+        guardado = sheets.add_evidence(estado.folio_activo, url, mime_type=mime_type, link_miniatura=url_miniatura)
 
         if guardado:
             tg.send_text(chat_id, f"Evidencia guardada en la actividad {estado.folio_activo}. ✅")
