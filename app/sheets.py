@@ -51,7 +51,7 @@ from zoneinfo import ZoneInfo
 
 import gspread
 from google.oauth2.service_account import Credentials
-from gspread.utils import rowcol_to_a1
+from gspread.utils import rowcol_to_a1, ValueRenderOption
 
 from app.config import CONTRATO_INFO, TECNICOS_INFO
 
@@ -359,7 +359,13 @@ def add_evidence(
     if mime_type.startswith("image/"):
         url_formula = link_miniatura or link
         for col in COL_FOTOS:
-            if not ws.cell(row_idx, col).value:
+            # OJO: hay que leer con value_render_option="FORMULA". Con el
+            # default (FORMATTED_VALUE), una celda con =IMAGE() regresa vacío
+            # -no hay texto que "mostrar" para una imagen- así que sin esto
+            # cada foto nueva pensaba que "Foto 1" seguía libre y sobrescribía
+            # la anterior en vez de pasar a "Foto 2".
+            actual_col = ws.cell(row_idx, col, value_render_option=ValueRenderOption.formula).value
+            if not actual_col:
                 ws.update_cell(row_idx, col, f'=IMAGE("{url_formula}", 4, {TAMANO_FOTO_PX}, {TAMANO_FOTO_PX})')
                 _ajustar_dimensiones_foto(ws, row_idx)
                 break
