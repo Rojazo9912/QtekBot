@@ -1,63 +1,173 @@
 """
-Piloto FieldTI AI — bot de WhatsApp que llena el reporte en Google Sheets.
+Piloto FieldTI AI — Bot de Telegram + Web App para registro de actividades en Google Sheets.
 
-Este archivo YA NO tiene la lógica de conversación adentro — vive en
-app/bot_logic.py (procesar_mensaje_web) y aquí solo se adapta al canal
-WhatsApp: se recibe el webhook y se manda cada respuesta con whatsapp.send_text.
-Esto es para que WhatsApp y la web app (app/webapp.py) compartan EXACTAMENTE
-la misma lógica de negocio y no se puedan desincronizar entre sí.
-
-NO cubre en este piloto (a propósito, para no inflar el alcance):
-- Evidencias (fotos/audios).
-- Dashboard — el propio Google Sheet ES el dashboard del piloto.
-- Multi-actividad simultánea real — una actividad activa a la vez por técnico.
+Punto de entrada principal para Railway y desarrollo local.
+Comando de inicio: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 """
 import os
-from fastapi import FastAPI, Request, Response
+from pathlib import Path
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from app import whatsapp
+from app import telegram_client as tg
+from app import sheets, drive
 from app.bot_logic import procesar_mensaje_web
+from app.state import get_estado
 
-app = FastAPI()
+app = FastAPI(title="FieldTI AI - Telegram Bot")
 
-VERIFY_TOKEN = os.environ["WHATSAPP_VERIFY_TOKEN"]
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Mapeo temporal número -> nombre de técnico para el piloto (2-3 personas).
-# En producción esto debe salir de una tabla "technicians", no de un dict fijo.
-TECNICOS = {
-    "526182692461": "Miguel Abraham Lopez Ortiz",
-}
+# Mismo piloto de 2-3 técnicos. Cámbialo por los nombres reales de tu equipo.
+TECNICOS = ["Miguel Abraham Lopez Ortiz"]
 
+# chat_id de Telegram -> nombre de técnico. En memoria (ver aviso en app/state.py)
+SESIONES: dict[int, str] = {}
 
-@app.get("/webhook")
-def verify(request: Request):
-    """Meta llama esto una sola vez al configurar el webhook en su consola."""
-    params = request.query_params
-    if params.get("hub.verify_token") == VERIFY_TOKEN:
-        return Response(content=params.get("hub.challenge", ""), media_type="text/plain")
-    return Response(status_code=403)
+WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
 
 
-@app.post("/webhook")
-async def receive(request: Request):
-    payload = await request.json()
-    try:
-        entry = payload["entry"][0]["changes"][0]["value"]
-        if "messages" not in entry:
-            return {"status": "ignored"}  # son eventos de "status" (entregado/leído), no mensajes
-        msg = entry["messages"][0]
-        contacts = entry.get("contacts", [])
-        from_number = contacts[0]["wa_id"] if contacts else msg["from"]
-        texto = msg.get("text", {}).get("body", "")
-    except (KeyError, IndexError):
-        return {"status": "ignored"}
+@app.get("/")
+def index():
+    """Health check o interfaz web local si existe."""
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    return {"status": "ok", "service": "FieldTI AI Telegram Bot"}
 
-    tecnico = TECNICOS.get(from_number)
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+
+# API para la Web App de pruebas local
+class MensajeIn(BaseModel):
+    tecnico: str
+    texto: str
+
+
+@app.get("/api/tecnicos")
+def listar_tecnicos():
+    return {"tecnicos": TECNICOS}
+
+
+@app.post("/api/chat")
+def chat(mensaje: MensajeIn):
+    if mensaje.tecnico not in TECNICOS:
+        return {"respuestas": ["Técnico no reconocido. Recarga la página e intenta de nuevo."]}
+    respuestas = procesar_mensaje_web(mensaje.tecnico, mensaje.texto)
+    return {"respuestas": respuestas}
+
+
+# Webhook para Telegram Bot
+@app.post("/telegram-webhook")
+async def telegram_webhook(request: Request):
+    if WEBHOOK_SECRET:
+        header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if header != WEBHOOK_SECRET:
+            print(f"[telegram] secret_token no coincide. Recibido={header!r}")
+            return JSONResponse(status_code=403, content={"status": "forbidden"})
+
+    update = await request.json()
+
+    if "callback_query" in update:
+        _manejar_seleccion_tecnico(update["callback_query"])
+        return {"status": "ok"}
+
+    if "message" in update:
+        message = update["message"]
+        if "photo" in message or "document" in message:
+            _manejar_foto(message)
+        else:
+            _manejar_mensaje(message)
+        return {"status": "ok"}
+
+    return {"status": "ignored"}
+
+
+def _manejar_seleccion_tecnico(callback_query: dict):
+    chat_id = callback_query["message"]["chat"]["id"]
+    data = callback_query.get("data", "")
+    tg.responder_callback(callback_query["id"])
+    if not data.startswith("login:"):
+        return
+    nombre = data.removeprefix("login:")
+    if nombre not in TECNICOS:
+        tg.send_text(chat_id, "Técnico no reconocido. Manda /start de nuevo.", con_teclado=False)
+        return
+    SESIONES[chat_id] = nombre
+    tg.send_text(chat_id, f"Hola, {nombre.split(' ')[0]}. Usa los botones o escribe libremente.")
+
+
+def _manejar_foto(message: dict):
+    chat_id = message["chat"]["id"]
+    tecnico = SESIONES.get(chat_id)
     if not tecnico:
-        whatsapp.send_text(from_number, "Tu número no está registrado como técnico. Contacta a tu supervisor.")
-        return {"status": "unregistered"}
+        tg.send_text(chat_id, "Primero manda /start para identificarte.", con_teclado=False)
+        return
 
-    respuestas = procesar_mensaje_web(tecnico, texto)
+    estado = get_estado(tecnico)
+    if not estado.folio_activo:
+        tg.send_text(chat_id, "No tienes ninguna actividad activa a la cual adjuntar esta evidencia. Inicia o reanuda una actividad primero.")
+        return
+
+    tg.send_text(chat_id, "Subiendo evidencia a Google Drive…", con_teclado=False)
+    try:
+        mime_type = "image/jpeg"
+        if "photo" in message:
+            file_id = message["photo"][-1]["file_id"]
+            extension = "jpg"
+        elif "document" in message:
+            doc = message["document"]
+            file_id = doc["file_id"]
+            mime_type = doc.get("mime_type", "application/octet-stream")
+            file_name = doc.get("file_name", "archivo.jpg")
+            extension = file_name.split(".")[-1] if "." in file_name else "bin"
+        else:
+            tg.send_text(chat_id, "Tipo de archivo no soportado como evidencia.")
+            return
+
+        contenido, file_path = tg.descargar_archivo(file_id)
+        file_suffix = file_path.split('/')[-1] if '/' in file_path else f"evidencia.{extension}"
+        nombre_archivo = f"{estado.folio_activo}_{file_suffix}"
+        
+        link = drive.upload_photo(contenido, nombre_archivo, mime_type=mime_type)
+        guardado = sheets.add_evidence(estado.folio_activo, link)
+        
+        if guardado:
+            tg.send_text(chat_id, f"Evidencia guardada exitosamente en la actividad {estado.folio_activo}. ✅\nEnlace: {link}")
+        else:
+            tg.send_text(chat_id, f"La foto se subió a Drive, pero no encontré la fila del folio {estado.folio_activo} en el Sheet para anexarla. Revísalo a mano: {link}")
+    except Exception as e:
+        print(f"[evidencia] error subiendo evidencia: {e}")
+        tg.send_text(chat_id, f"No pude subir la evidencia. Ocurrió un error: {e}")
+
+
+
+def _manejar_mensaje(message: dict):
+    chat_id = message["chat"]["id"]
+    texto = message.get("text", "")
+
+    if texto == "/start":
+        if len(TECNICOS) == 1:
+            SESIONES[chat_id] = TECNICOS[0]
+            tg.send_text(chat_id, f"Hola, {TECNICOS[0].split(' ')[0]}. Usa los botones o escribe libremente.")
+        else:
+            tg.send_seleccion_tecnico(chat_id, TECNICOS)
+        return
+
+    tecnico = SESIONES.get(chat_id)
+    if not tecnico:
+        tg.send_text(chat_id, "Primero manda /start para identificarte.", con_teclado=False)
+        return
+
+    texto_normalizado = tg.normalizar_texto_boton(texto)
+    respuestas = procesar_mensaje_web(tecnico, texto_normalizado)
     for r in respuestas:
-        whatsapp.send_text(from_number, r)
-    return {"status": "ok"}
+        tg.send_text(chat_id, r)
+

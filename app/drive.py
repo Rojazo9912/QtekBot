@@ -1,27 +1,10 @@
 """
-Sube evidencias (fotos) a Google Drive y regresa un link para verlas desde el
+Sube evidencias (fotos y documentos) a Google Drive y regresa un link para verlas desde el
 Google Sheet. Usa la MISMA cuenta de servicio que ya tienes para Sheets — solo
-necesita permiso extra de Drive.
-
-Setup adicional (una sola vez):
-1. En Google Cloud Console, habilita también la "Google Drive API" (además de
-   la de Sheets que ya habilitaste).
-2. En tu Google Drive normal (el de tu cuenta, no la cuenta de servicio),
-   crea una carpeta para las evidencias del piloto.
-3. Comparte esa carpeta como Editor con el mismo email de la cuenta de
-   servicio (el "client_email" del JSON, ej. fieldti-bot@...gserviceaccount.com)
-   — igual que hiciste con el Sheet.
-4. Copia el ID de la carpeta de la URL (la parte después de /folders/) y
-   ponlo en la variable de entorno DRIVE_FOLDER_ID.
-
-Nota de privacidad, para que la conozcas: las fotos se suben con permiso
-"cualquiera con el link puede ver" — no son públicas por buscador, pero
-tampoco están restringidas a personas específicas. Es lo más simple para que
-el link funcione directo desde el Sheet sin pedir login. Si necesitas más
-control de acceso, se puede cambiar por compartir solo con los correos de tu
-equipo, pero eso complica el setup.
+necesita permiso de Drive.
 """
 import io
+import mimetypes
 import os
 import json
 
@@ -31,6 +14,7 @@ from googleapiclient.http import MediaIoBaseUpload
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/drive.file",
 ]
 DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")
@@ -62,17 +46,31 @@ def _get_service():
 
 
 def upload_photo(contenido: bytes, nombre_archivo: str, mime_type: str = "image/jpeg") -> str:
-    """Sube una foto a Drive y regresa el link para verla (webViewLink)."""
+    """Sube una foto o archivo a Drive y regresa el link para verla (webViewLink)."""
     service = _get_service()
+    
+    # Inferir mime_type si viene genérico o por la extensión del archivo
+    if mime_type == "image/jpeg" or not mime_type:
+        guessed_type, _ = mimetypes.guess_type(nombre_archivo)
+        if guessed_type:
+            mime_type = guessed_type
+
     metadata = {"name": nombre_archivo}
     if DRIVE_FOLDER_ID:
         metadata["parents"] = [DRIVE_FOLDER_ID]
+    else:
+        print("[drive] AVISO: DRIVE_FOLDER_ID no está configurado. La foto se subirá al directorio raíz de la cuenta de servicio.")
+
     media = MediaIoBaseUpload(io.BytesIO(contenido), mimetype=mime_type, resumable=False)
     archivo = service.files().create(body=metadata, media_body=media, fields="id, webViewLink").execute()
 
-    # La hacemos visible por link para que se pueda abrir directo desde el Sheet.
-    service.permissions().create(
-        fileId=archivo["id"], body={"type": "anyone", "role": "reader"}
-    ).execute()
+    # Intentamos hacerla visible por enlace. Si las políticas del dominio de la cuenta lo impiden, no rompemos el proceso.
+    try:
+        service.permissions().create(
+            fileId=archivo["id"], body={"type": "anyone", "role": "reader"}
+        ).execute()
+    except Exception as pe:
+        print(f"[drive] Aviso: No se pudo asignar permiso público 'anyone' ({pe}). El archivo igual se subió en Drive: {archivo.get('webViewLink')}")
 
-    return archivo["webViewLink"]
+    return archivo.get("webViewLink", f"https://drive.google.com/file/d/{archivo['id']}/view")
+

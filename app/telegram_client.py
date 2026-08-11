@@ -75,7 +75,12 @@ def set_webhook(url: str) -> dict:
 
 
 def descargar_foto(file_id: str) -> tuple[bytes, str]:
-    """Descarga una foto de Telegram. Regresa (contenido_en_bytes, file_path)."""
+    """Descarga una foto o archivo de Telegram. Regresa (contenido_en_bytes, file_path)."""
+    return descargar_archivo(file_id)
+
+
+def descargar_archivo(file_id: str) -> tuple[bytes, str]:
+    """Descarga un archivo/foto de Telegram. Regresa (contenido_en_bytes, file_path)."""
     with httpx.Client(timeout=30) as http:
         r = http.get(f"{API_URL}/getFile", params={"file_id": file_id})
         r.raise_for_status()
@@ -84,3 +89,4 @@ def descargar_foto(file_id: str) -> tuple[bytes, str]:
         r2 = http.get(file_url)
         r2.raise_for_status()
         return r2.content, file_path
+
