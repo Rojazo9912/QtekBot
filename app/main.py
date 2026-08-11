@@ -30,7 +30,7 @@ VERIFY_TOKEN = os.environ["WHATSAPP_VERIFY_TOKEN"]
 # Mapeo temporal número -> nombre de técnico para el piloto (2-3 personas).
 # En producción esto debe salir de una tabla "technicians", no de un dict fijo.
 TECNICOS = {
-    "5216181234567": "Juan Pérez",
+    "5216182692461": "Miguel Abraham Lopez Ortiz",
     "5216189876543": "Alonso Ibarra Mata",
 }
 
