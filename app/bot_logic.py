@@ -44,6 +44,14 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         estado.borrador = {}
         decir(f"Actividad iniciada. Folio/ticket: {folio}. Escribe 'pausar' o 'finalizar' cuando corresponda.")
         return respuestas
+    if estado.esperando == "evidencias":
+        respuesta = texto.strip().lower()
+        if respuesta in ("listo", "no", "omitir", "ninguna", "ya"):
+            estado.esperando = "solucion"
+            decir("¿Cuál fue la solución?")
+        else:
+            decir("Manda tus fotos ahora (una o varias), o escribe 'listo' si ya terminaste / no tienes fotos.")
+        return respuestas
     if estado.esperando == "solucion":
         estado.borrador["solucion"] = texto.strip()
         estado.esperando = "receptor"
@@ -104,8 +112,8 @@ def _ejecutar_intencion(estado, intencion: str, decir):
         if not estado.folio_activo:
             decir("No tienes ninguna actividad activa para finalizar.")
             return
-        estado.esperando = "solucion"
-        decir("¿Cuál fue la solución?")
+        estado.esperando = "evidencias"
+        decir("Manda tus fotos de evidencia (una o varias). Cuando termines, escribe 'listo'. Si no tienes fotos, escribe 'no'.")
 
     elif intencion == "consultar":
         pendientes = sheets.list_open_activities(estado.nombre)
