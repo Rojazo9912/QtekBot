@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import telegram_client as tg
-from app import sheets
+from app import sheets, storage
 from app.bot_logic import procesar_mensaje_web
 from app.state import get_estado
 
@@ -105,8 +105,8 @@ def _manejar_seleccion_tecnico(callback_query: dict):
 
 
 def _manejar_foto(message: dict):
-    """Guarda el link directo de la foto/documento de Telegram como evidencia en el Sheet.
-    No sube el archivo a ningún storage externo — usa el CDN de Telegram directamente.
+    """Descarga la foto/documento de Telegram y la sube a Supabase Storage.
+    Guarda la URL pública permanente en la columna Evidencias del Sheet.
     """
     chat_id = message["chat"]["id"]
     tecnico = SESIONES.get(chat_id)
@@ -119,26 +119,32 @@ def _manejar_foto(message: dict):
         tg.send_text(chat_id, "No tienes ninguna actividad activa a la cual adjuntar esta evidencia. Inicia o reanuda una actividad primero.")
         return
 
-    tg.send_text(chat_id, "Guardando evidencia…", con_teclado=False)
+    tg.send_text(chat_id, "Subiendo evidencia…", con_teclado=False)
     try:
         if "photo" in message:
             file_id = message["photo"][-1]["file_id"]
+            mime_type = "image/jpeg"
         elif "document" in message:
-            file_id = message["document"]["file_id"]
+            doc = message["document"]
+            file_id = doc["file_id"]
+            mime_type = doc.get("mime_type", "application/octet-stream")
         else:
             tg.send_text(chat_id, "Tipo de archivo no soportado como evidencia.")
             return
 
-        link = tg.get_file_url(file_id)
-        guardado = sheets.add_evidence(estado.folio_activo, link)
+        contenido, file_path = tg.descargar_archivo(file_id)
+        nombre_archivo = f"{estado.folio_activo}_{file_path.split('/')[-1]}"
+
+        url = storage.upload_evidence(contenido, nombre_archivo, mime_type=mime_type)
+        guardado = sheets.add_evidence(estado.folio_activo, url, mime_type=mime_type)
 
         if guardado:
-            tg.send_text(chat_id, f"Evidencia registrada en la actividad {estado.folio_activo}. ✅")
+            tg.send_text(chat_id, f"Evidencia guardada en la actividad {estado.folio_activo}. ✅")
         else:
-            tg.send_text(chat_id, f"No encontré la fila del folio {estado.folio_activo} en el Sheet para guardar la evidencia. Link: {link}")
+            tg.send_text(chat_id, f"La evidencia se subió, pero no encontré la fila del folio {estado.folio_activo} en el Sheet. Link: {url}")
     except Exception as e:
-        print(f"[evidencia] error guardando evidencia: {e}")
-        tg.send_text(chat_id, f"No pude guardar la evidencia. Error: {e}")
+        print(f"[evidencia] error subiendo evidencia: {e}")
+        tg.send_text(chat_id, f"No pude subir la evidencia. Error: {e}")
 
 
 

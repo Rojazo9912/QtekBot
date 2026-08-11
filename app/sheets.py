@@ -13,7 +13,13 @@ Requiere:
 
 Estructura esperada de la hoja "Actividades" (fila 1 = encabezados):
 Folio | Ticket | Técnico | Fecha | Hora Apertura | Hora Pausa | Hora Reanudación |
-Hora Finalizado | Estado | Área | Problema | Solución | Receptor | Evidencias
+Hora Finalizado | Estado | Área | Problema | Solución | Receptor | Evidencias |
+Foto 1 | Foto 2 | Foto 3
+
+Las columnas "Foto N" muestran una miniatura de la imagen (fórmula =IMAGE()) para
+hasta 3 evidencias por actividad; si se suben más de 3, las adicionales solo
+quedan como link de texto en "Evidencias". La columna "Evidencias" sigue
+llevando el registro completo en texto de todos los links, como respaldo.
 """
 import os
 import json
@@ -23,6 +29,7 @@ from zoneinfo import ZoneInfo
 
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.utils import rowcol_to_a1
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -62,8 +69,11 @@ def _load_credentials() -> Credentials:
 HEADERS = [
     "Folio", "Ticket", "Técnico", "Fecha", "Hora Apertura", "Hora Pausa",
     "Hora Reanudación", "Hora Finalizado", "Estado", "Área", "Problema",
-    "Solución", "Receptor", "Evidencias",
+    "Solución", "Receptor", "Evidencias", "Foto 1", "Foto 2", "Foto 3",
 ]
+
+COL_EVIDENCIAS = 14
+COL_FOTOS = [15, 16, 17]  # columnas con miniatura =IMAGE(), una por evidencia (máx. 3)
 
 _client = None
 _worksheet = None
@@ -78,11 +88,26 @@ def _get_worksheet():
     sh = _client.open_by_key(SHEET_ID)
     try:
         ws = sh.worksheet(WORKSHEET_NAME)
+        _asegurar_columnas_evidencia(ws)
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=WORKSHEET_NAME, rows=1000, cols=len(HEADERS))
         ws.append_row(HEADERS)
     _worksheet = ws
     return ws
+
+
+def _asegurar_columnas_evidencia(ws) -> None:
+    """Migra hojas creadas antes de las columnas Foto 1-3: agrega los
+    encabezados que falten y expande la cuadrícula si hace falta. No toca
+    filas ya existentes."""
+    encabezados = ws.row_values(1)
+    if len(encabezados) >= len(HEADERS):
+        return
+    if ws.col_count < len(HEADERS):
+        ws.add_cols(len(HEADERS) - ws.col_count)
+    faltantes = HEADERS[len(encabezados):]
+    rango = f"{rowcol_to_a1(1, len(encabezados) + 1)}:{rowcol_to_a1(1, len(HEADERS))}"
+    ws.update([faltantes], rango)
 
 
 def _next_folio() -> str:
@@ -107,7 +132,7 @@ def start_activity(tecnico: str, ticket: Optional[str], area: str, problema: str
     row = [
         folio, ticket or "", tecnico, now.strftime("%Y-%m-%d"),
         now.strftime("%H:%M:%S"), "", "", "", "En proceso", area, problema,
-        "", "", "",
+        "", "", "", "", "", "",
     ]
     ws.append_row(row)
     return folio
@@ -148,16 +173,27 @@ def finish_activity(folio: str, solucion: str, receptor: str) -> bool:
     return True
 
 
-def add_evidence(folio: str, link: str) -> bool:
-    """Anexa un link de evidencia (foto en Drive) a la fila del folio. Si ya
-    había otro link, lo agrega en una línea nueva, no lo sobrescribe."""
+def add_evidence(folio: str, link: str, mime_type: str = "image/jpeg") -> bool:
+    """Anexa un link de evidencia a la fila del folio (columna Evidencias, texto
+    completo como respaldo). Si además es una imagen y hay un hueco libre entre
+    las columnas Foto 1-3, escribe ahí una miniatura con =IMAGE() para verla
+    directo en el Sheet. A partir de la 4a foto (o si no es imagen), solo queda
+    el link en texto."""
     row_idx = _find_row_by_folio(folio)
     if not row_idx:
         return False
     ws = _get_worksheet()
-    actual = ws.cell(row_idx, 14).value or ""
+
+    actual = ws.cell(row_idx, COL_EVIDENCIAS).value or ""
     nuevo = f"{actual}\n{link}".strip() if actual else link
-    ws.update_cell(row_idx, 14, nuevo)
+    ws.update_cell(row_idx, COL_EVIDENCIAS, nuevo)
+
+    if mime_type.startswith("image/"):
+        for col in COL_FOTOS:
+            if not ws.cell(row_idx, col).value:
+                ws.update_cell(row_idx, col, f'=IMAGE("{link}", 4, 120, 120)')
+                break
+
     return True
 
 
