@@ -216,6 +216,18 @@ def _letra(col: int) -> str:
     return rowcol_to_a1(1, col).rstrip("0123456789")
 
 
+def _valor(fila: list, col: int) -> str:
+    """Valor de una columna (1-indexada) dentro de una fila obtenida con
+    get_all_values(). Por posición, no por nombre de encabezado — a
+    diferencia de get_all_records(), no truena si la fila 2 real del Sheet
+    tiene encabezados repetidos o vacíos de más (ver aviso en
+    list_open_activities). get_all_values() recorta cada fila hasta su
+    última celda no vacía, así que puede venir más corta que COL_*; de ahí
+    el chequeo de rango."""
+    idx = col - 1
+    return fila[idx] if idx < len(fila) else ""
+
+
 def _rango_registro(col_letra: str) -> str:
     return f"'{WORKSHEET_NAME}'!${col_letra}$4:${col_letra}${RANGO_MAX_FILA}"
 
@@ -632,10 +644,10 @@ def codigo_activacion_pendiente(nombre: str) -> Optional[str]:
     nadie les ha escrito al bot todavía, así que no hay a quién mandarle el
     código por Telegram."""
     ws = _get_tecnicos_ws()
-    records = ws.get_all_records(head=2)
-    for r in records:
-        if r.get("Nombre") == nombre:
-            codigo = str(r.get("Código de Activación") or "").strip()
+    filas = ws.get_all_values()[2:]  # después de título (fila1) y encabezado (fila2)
+    for fila in filas:
+        if _valor(fila, COL_TEC_NOMBRE) == nombre:
+            codigo = _valor(fila, COL_TEC_CODIGO).strip()
             return codigo or None
     return None
 
@@ -829,10 +841,23 @@ def list_open_activities(tecnico: str) -> list[dict]:
     esquema del PRD no distingue eso a nivel de Sheet, ver docstring del
     módulo). La distinción "activo ahora mismo" vs "pausado" para el flujo
     del bot se hace en app/bot_logic.py comparando contra
-    estado.folio_activo, no aquí."""
+    estado.folio_activo, no aquí.
+
+    Lee por posición de columna (get_all_values), no por nombre de
+    encabezado (get_all_records): la fila 2 del Sheet puede tener
+    encabezados repetidos o vacíos de más si esa pestaña se creó con una
+    versión anterior del código, y get_all_records truena en ese caso."""
     ws = _get_worksheet()
-    records = ws.get_all_records(head=2)
-    return [
-        r for r in records
-        if r.get("Técnico") == tecnico and r.get("Estatus") == ESTATUS_EN_PROCESO
-    ]
+    filas = ws.get_all_values()[3:]  # después de título, encabezado y fila de ejemplo
+    abiertas = []
+    for fila in filas:
+        folio = _valor(fila, COL_FOLIO)
+        if not folio:
+            continue
+        if _valor(fila, COL_TECNICO) != tecnico or _valor(fila, COL_ESTATUS) != ESTATUS_EN_PROCESO:
+            continue
+        abiertas.append({
+            "Folio": folio,
+            "Tipo de Falla": _valor(fila, COL_TIPO_FALLA),
+        })
+    return abiertas
