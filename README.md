@@ -77,7 +77,23 @@ Obtén tu API key en [platform.openai.com](https://platform.openai.com) (`OPENAI
 
 ---
 
-## 👥 Registro de Técnicos
+## 👥 Registro de Técnicos y administración
 
-En `app/main.py`, actualiza la lista `TECNICOS` con los nombres exactos de los técnicos que utilizarán el bot. Cada técnico deberá enviar `/start` al bot en Telegram para identificarse y comenzar a registrar sus actividades.
+La lista de técnicos ya no vive en el código: vive en la pestaña **"Técnicos"** del Google Sheet, y el admin del bot (definido en `ADMIN_TECNICOS` en `app/config.py`) la administra desde el propio chat de Telegram:
+
+1. El admin manda `/nuevo_tecnico Nombre Completo`. El bot da de alta al técnico y responde con un código de activación de un solo uso.
+2. El admin le reenvía ese código al técnico por fuera del bot (WhatsApp, en persona, etc.).
+3. El técnico abre un chat con el bot y manda `/start CÓDIGO`. Con eso, su chat de Telegram queda vinculado a su nombre **para siempre** — nadie más puede volver a usar ese código ni hacerse pasar por él, ni siquiera si el bot se reinicia.
+
+El primer técnico (el que venga sembrado en `TECNICOS`/`TECNICOS_INFO` de `app/config.py`, usado solo para crear la pestaña "Técnicos" la primera vez) no tiene a quién mandarle el código por chat porque todavía nadie le ha escrito al bot. Para ese caso, recupera su código con:
+
+```
+GET /api/codigo-activacion?secret=<REPORTE_ADMIN_SECRET>&nombre=<nombre exacto del técnico>
+```
+
+y mándale tú mismo `/start CÓDIGO` la primera vez.
+
+Comandos solo para el admin (los demás técnicos reciben "No tienes permiso"):
+- `/nuevo_tecnico Nombre Completo` — da de alta un técnico nuevo.
+- `/reporte` o `/reporte AAAA-MM-DD AAAA-MM-DD` — fija el periodo del reporte contractual en la hoja "Reporte PDF" (semana calendario actual si no se especifican fechas).
 

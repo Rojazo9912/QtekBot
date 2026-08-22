@@ -62,28 +62,6 @@ def send_opciones(chat_id: int, texto: str, opciones: list[str]) -> None:
             print(f"[telegram] error {r.status_code}: {r.text}")
 
 
-def send_seleccion_tecnico(chat_id: int, nombres: list[str]) -> None:
-    """Botones en línea (uno por técnico) para el /start."""
-    teclado = {
-        "inline_keyboard": [[{"text": nombre, "callback_data": f"login:{nombre}"}] for nombre in nombres]
-    }
-    payload = {
-        "chat_id": chat_id,
-        "text": "¿Quién eres? Elige tu nombre para empezar.",
-        "reply_markup": teclado,
-    }
-    with httpx.Client(timeout=10) as http:
-        r = http.post(f"{API_URL}/sendMessage", json=payload)
-        if r.status_code >= 400:
-            print(f"[telegram] error {r.status_code}: {r.text}")
-
-
-def responder_callback(callback_query_id: str) -> None:
-    """Le confirma a Telegram que ya procesamos el clic del botón (evita el 'reloj' de carga)."""
-    with httpx.Client(timeout=10) as http:
-        http.post(f"{API_URL}/answerCallbackQuery", json={"callback_query_id": callback_query_id})
-
-
 def set_webhook(url: str) -> dict:
     with httpx.Client(timeout=10) as http:
         r = http.post(f"{API_URL}/setWebhook", json={"url": url})

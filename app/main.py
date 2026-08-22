@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from app import telegram_client as tg
 from app import sheets, storage
 from app.bot_logic import procesar_mensaje_web
-from app.config import CATALOGO_PRIORIDAD, CATALOGO_TIPO_FALLA, TECNICOS
+from app.config import ADMIN_TECNICOS, CATALOGO_AREA, CATALOGO_PRIORIDAD, CATALOGO_TIPO_FALLA
 from app.state import get_estado
 
 app = FastAPI(title="FieldTI AI - Telegram Bot")
@@ -24,7 +24,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# chat_id de Telegram -> nombre de técnico. En memoria (ver aviso en app/state.py)
+# chat_id de Telegram -> nombre de técnico. Caché en memoria (se pierde si el
+# bot se reinicia, ver aviso en app/state.py); la fuente de verdad durable es
+# el chat_id ya vinculado en la hoja "Técnicos" (ver _tecnico_de más abajo).
 SESIONES: dict[int, str] = {}
 
 WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
@@ -38,6 +40,7 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 # Pasos de la conversación en los que el bot ofrece un catálogo fijo de
 # opciones (en vez del teclado persistente de atajos).
 CATALOGOS_POR_ESTADO = {
+    "area": CATALOGO_AREA,
     "tipo_falla": CATALOGO_TIPO_FALLA,
     "prioridad": CATALOGO_PRIORIDAD,
 }
@@ -65,7 +68,7 @@ class MensajeIn(BaseModel):
 
 @app.get("/api/tecnicos")
 def listar_tecnicos():
-    return {"tecnicos": TECNICOS}
+    return {"tecnicos": sheets.listar_tecnicos()}
 
 
 @app.get("/evidencia/{ruta:path}")
@@ -84,16 +87,18 @@ def servir_evidencia(ruta: str):
     return Response(content=contenido, media_type=mime_type)
 
 
-@app.get("/api/reporte-semanal")
-def generar_reporte_semanal(secret: str = "", desde: str = "", hasta: str = ""):
-    """Reconstruye las pestañas 'Resumen Semanal' y 'Reporte Semanal' a partir
-    de lo capturado en 'Reporte Diario'. Pensado para que un admin de Qtek lo
-    dispare a mano (pegando la URL en el navegador) antes de mandar el
-    reporte semanal a First Majestic — no se llama desde el chat.
+@app.get("/api/reporte-periodo")
+def fijar_periodo_reporte(secret: str = "", desde: str = "", hasta: str = ""):
+    """Fija el periodo del reporte contractual (celdas C13/E13 de 'Reporte
+    PDF'): con eso, las fórmulas de esa hoja recalculan solas la tabla de
+    Actividades, % de Avance Real y Tickets Atendidos por técnico a partir de
+    'Registro de Tickets' — no hay nada más que reescribir desde Python.
+    Pensado para que un admin de Qtek lo dispare a mano (pegando la URL en el
+    navegador) antes de mandar el reporte a First Majestic — no se llama
+    desde el chat.
 
     Sin `desde`/`hasta` (formato YYYY-MM-DD), usa la semana calendario actual
-    (lunes a domingo). Protegido con REPORTE_ADMIN_SECRET porque reescribe
-    esas dos pestañas por completo.
+    (lunes a domingo). Protegido con REPORTE_ADMIN_SECRET.
     """
     if REPORTE_ADMIN_SECRET and secret != REPORTE_ADMIN_SECRET:
         return JSONResponse(status_code=403, content={"status": "forbidden"})
@@ -110,13 +115,33 @@ def generar_reporte_semanal(secret: str = "", desde: str = "", hasta: str = ""):
             status_code=400,
             content={"status": "error", "detalle": "Fechas inválidas. Usa formato YYYY-MM-DD."},
         )
-    resumen = sheets.generar_reporte_semanal(fecha_inicio, fecha_fin)
-    return {"status": "ok", **resumen}
+    sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+    return {"status": "ok", "periodo": f"{fecha_inicio.isoformat()} a {fecha_fin.isoformat()}"}
+
+
+@app.get("/api/codigo-activacion")
+def obtener_codigo_activacion(secret: str = "", nombre: str = ""):
+    """Recupera el código de activación de un técnico que todavía no vinculó
+    ningún chat de Telegram. Solo hace falta para el/los técnico(s) semilla
+    de config.TECNICOS: como nadie les ha escrito al bot todavía, /nuevo_tecnico
+    no puede mandárselo por chat (no existe ese chat). Para cualquier técnico
+    agregado después con /nuevo_tecnico, el código ya sale directo en la
+    respuesta de ese comando — este endpoint no hace falta. Protegido con
+    REPORTE_ADMIN_SECRET, igual que /api/reporte-periodo."""
+    if REPORTE_ADMIN_SECRET and secret != REPORTE_ADMIN_SECRET:
+        return JSONResponse(status_code=403, content={"status": "forbidden"})
+    codigo = sheets.codigo_activacion_pendiente(nombre)
+    if not codigo:
+        return JSONResponse(
+            status_code=404,
+            content={"status": "not_found", "detalle": "Técnico no encontrado, o ya activó su cuenta."},
+        )
+    return {"status": "ok", "nombre": nombre, "codigo": codigo}
 
 
 @app.post("/api/chat")
 def chat(mensaje: MensajeIn):
-    if mensaje.tecnico not in TECNICOS:
+    if mensaje.tecnico not in sheets.listar_tecnicos():
         return {"respuestas": ["Técnico no reconocido. Recarga la página e intenta de nuevo."]}
     respuestas = procesar_mensaje_web(mensaje.tecnico, mensaje.texto)
     return {"respuestas": respuestas}
@@ -133,10 +158,6 @@ async def telegram_webhook(request: Request):
 
     update = await request.json()
 
-    if "callback_query" in update:
-        _manejar_seleccion_tecnico(update["callback_query"])
-        return {"status": "ok"}
-
     if "message" in update:
         message = update["message"]
         if "photo" in message or "document" in message:
@@ -148,28 +169,14 @@ async def telegram_webhook(request: Request):
     return {"status": "ignored"}
 
 
-def _manejar_seleccion_tecnico(callback_query: dict):
-    chat_id = callback_query["message"]["chat"]["id"]
-    data = callback_query.get("data", "")
-    tg.responder_callback(callback_query["id"])
-    if not data.startswith("login:"):
-        return
-    nombre = data.removeprefix("login:")
-    if nombre not in TECNICOS:
-        tg.send_text(chat_id, "Técnico no reconocido. Manda /start de nuevo.", con_teclado=False)
-        return
-    SESIONES[chat_id] = nombre
-    tg.send_text(chat_id, f"Hola, {nombre.split(' ')[0]}. Usa los botones o escribe libremente.")
-
-
 def _manejar_foto(message: dict):
     """Descarga la foto/documento de Telegram y la sube a Supabase Storage.
     Guarda la URL pública permanente en la columna Evidencias del Sheet.
     """
     chat_id = message["chat"]["id"]
-    tecnico = SESIONES.get(chat_id)
+    tecnico = _tecnico_de(chat_id)
     if not tecnico:
-        tg.send_text(chat_id, "Primero manda /start para identificarte.", con_teclado=False)
+        tg.send_text(chat_id, "Primero manda /start <código> para identificarte.", con_teclado=False)
         return
 
     estado = get_estado(tecnico)
@@ -208,21 +215,38 @@ def _manejar_foto(message: dict):
 
 
 
+def _tecnico_de(chat_id: int) -> str | None:
+    """Técnico identificado en este chat. SESIONES es solo una caché en
+    memoria (se pierde si el bot se reinicia); la fuente de verdad durable
+    es el chat_id ya vinculado en la hoja 'Técnicos' (ver
+    sheets.tecnico_por_chat_id)."""
+    tecnico = SESIONES.get(chat_id)
+    if tecnico:
+        return tecnico
+    tecnico = sheets.tecnico_por_chat_id(chat_id)
+    if tecnico:
+        SESIONES[chat_id] = tecnico
+    return tecnico
+
+
 def _manejar_mensaje(message: dict):
     chat_id = message["chat"]["id"]
     texto = message.get("text", "")
 
-    if texto == "/start":
-        if len(TECNICOS) == 1:
-            SESIONES[chat_id] = TECNICOS[0]
-            tg.send_text(chat_id, f"Hola, {TECNICOS[0].split(' ')[0]}. Usa los botones o escribe libremente.")
-        else:
-            tg.send_seleccion_tecnico(chat_id, TECNICOS)
+    if texto.startswith("/start"):
+        _manejar_start(chat_id, texto)
         return
 
-    tecnico = SESIONES.get(chat_id)
+    tecnico = _tecnico_de(chat_id)
     if not tecnico:
-        tg.send_text(chat_id, "Primero manda /start para identificarte.", con_teclado=False)
+        tg.send_text(chat_id, "Primero manda /start <código> para identificarte.", con_teclado=False)
+        return
+
+    if texto.startswith("/nuevo_tecnico"):
+        _admin_nuevo_tecnico(chat_id, tecnico, texto)
+        return
+    if texto.startswith("/reporte"):
+        _admin_generar_reporte(chat_id, tecnico, texto)
         return
 
     texto_normalizado = tg.normalizar_texto_boton(texto)
@@ -238,4 +262,92 @@ def _manejar_mensaje(message: dict):
         tg.send_opciones(chat_id, respuestas[-1], opciones)
     else:
         tg.send_text(chat_id, respuestas[-1])
+
+
+def _manejar_start(chat_id: int, texto: str):
+    """/start [código]. Tres casos:
+    1. Este chat ya está vinculado a un técnico (columna Chat ID de
+       'Técnicos') — lo re-identifica sin pedir nada.
+    2. Trae un código de activación válido — vincula este chat a ese
+       técnico para siempre (lo consume, no sirve dos veces) y lo identifica.
+    3. Cualquier otro caso — no hay forma de identificarse sin un código
+       real, así que no se ofrece ninguna lista de nombres para elegir (eso
+       es justo lo que permitiría a cualquiera hacerse pasar por otro
+       técnico)."""
+    tecnico_existente = _tecnico_de(chat_id)
+    if tecnico_existente:
+        tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Usa los botones o escribe libremente.")
+        return
+
+    partes = texto.split(maxsplit=1)
+    codigo = partes[1].strip() if len(partes) > 1 else ""
+    if not codigo:
+        tg.send_text(
+            chat_id,
+            "Necesitas un código de activación para usar este bot. Pídeselo al admin y mándalo así: /start CÓDIGO",
+            con_teclado=False,
+        )
+        return
+
+    nombre = sheets.activar_tecnico_por_codigo(codigo, chat_id)
+    if not nombre:
+        tg.send_text(chat_id, "Código inválido o ya usado. Pídele al admin un código nuevo.", con_teclado=False)
+        return
+
+    SESIONES[chat_id] = nombre
+    tg.send_text(chat_id, f"Hola, {nombre.split(' ')[0]}. Tu cuenta quedó activada. Usa los botones o escribe libremente.")
+
+
+def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
+    """/nuevo_tecnico Nombre Completo — solo ADMIN_TECNICOS. Da de alta un
+    técnico en la hoja 'Técnicos' del Sheet con un código de activación de
+    un solo uso; el admin se lo reenvía al técnico por fuera del bot
+    (WhatsApp, en persona) para que active su cuenta con /start CÓDIGO."""
+    if tecnico not in ADMIN_TECNICOS:
+        tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
+        return
+    nombre = texto.removeprefix("/nuevo_tecnico").strip()
+    if not nombre:
+        tg.send_text(chat_id, "Usa: /nuevo_tecnico Nombre Completo", con_teclado=False)
+        return
+    codigo = sheets.agregar_tecnico(nombre)
+    if not codigo:
+        tg.send_text(chat_id, f"{nombre} ya estaba en la lista de técnicos.")
+        return
+    tg.send_text(
+        chat_id,
+        f"Técnico agregado: {nombre}.\n"
+        f"Mándale este código para que active su cuenta (funciona una sola vez):\n"
+        f"/start {codigo}",
+    )
+
+
+def _admin_generar_reporte(chat_id: int, tecnico: str, texto: str):
+    """/reporte [AAAA-MM-DD AAAA-MM-DD] — solo ADMIN_TECNICOS. Fija el
+    periodo del reporte contractual en 'Reporte PDF'; las fórmulas de esa
+    hoja recalculan solas. El PDF real se descarga desde Google Sheets
+    (Archivo > Descargar > PDF) — el bot no genera el archivo."""
+    if tecnico not in ADMIN_TECNICOS:
+        tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
+        return
+    partes = texto.split()[1:]
+    try:
+        if len(partes) == 2:
+            fecha_inicio = dt.date.fromisoformat(partes[0])
+            fecha_fin = dt.date.fromisoformat(partes[1])
+        elif not partes:
+            hoy = dt.datetime.now(sheets.ZONA_HORARIA).date()
+            fecha_inicio = hoy - dt.timedelta(days=hoy.weekday())
+            fecha_fin = fecha_inicio + dt.timedelta(days=6)
+        else:
+            raise ValueError
+    except ValueError:
+        tg.send_text(chat_id, "Usa: /reporte  o  /reporte AAAA-MM-DD AAAA-MM-DD", con_teclado=False)
+        return
+    sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+    tg.send_text(
+        chat_id,
+        f"Reporte listo para el periodo {fecha_inicio.isoformat()} a {fecha_fin.isoformat()}. "
+        "Descárgalo desde Google Sheets: hoja 'Reporte PDF' > Archivo > Descargar > PDF.",
+    )
 
