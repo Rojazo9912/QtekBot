@@ -36,6 +36,7 @@ ADMIN_TECNICOS = ["Miguel Abraham Lopez Ortiz"]
 # texto libre distinto cada vez).
 CATALOGO_TIPO_FALLA = [
     "Falla de red",
+    "Revision de Leaky Feeder",
     "Hardware / Equipo dañado",
     "Software / Configuración",
     "Impresión",
