@@ -40,6 +40,8 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 # Pasos de la conversación en los que el bot ofrece un catálogo fijo de
 # opciones (en vez del teclado persistente de atajos).
 CATALOGOS_POR_ESTADO = {
+    "ticket_si_no": ["Sí", "No"],
+    "confirmacion": ["Sí", "No"],
     "area": CATALOGO_AREA,
     "tipo_falla": CATALOGO_TIPO_FALLA,
     "prioridad": CATALOGO_PRIORIDAD,
@@ -68,7 +70,12 @@ class MensajeIn(BaseModel):
 
 @app.get("/api/tecnicos")
 def listar_tecnicos():
-    return {"tecnicos": sheets.listar_tecnicos()}
+    try:
+        return {"tecnicos": sheets.listar_tecnicos()}
+    except Exception as e:
+        print(f"[api/tecnicos] error listando técnicos de sheets: {e}")
+        from app.config import TECNICOS
+        return {"tecnicos": TECNICOS}
 
 
 @app.get("/evidencia/{ruta:path}")
@@ -115,7 +122,14 @@ def fijar_periodo_reporte(secret: str = "", desde: str = "", hasta: str = ""):
             status_code=400,
             content={"status": "error", "detalle": "Fechas inválidas. Usa formato YYYY-MM-DD."},
         )
-    sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+    try:
+        sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+    except Exception as e:
+        print(f"[reporte] error al fijar periodo: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detalle": f"Error al actualizar Google Sheets: {e}"},
+        )
     return {"status": "ok", "periodo": f"{fecha_inicio.isoformat()} a {fecha_fin.isoformat()}"}
 
 
@@ -130,7 +144,11 @@ def obtener_codigo_activacion(secret: str = "", nombre: str = ""):
     REPORTE_ADMIN_SECRET, igual que /api/reporte-periodo."""
     if REPORTE_ADMIN_SECRET and secret != REPORTE_ADMIN_SECRET:
         return JSONResponse(status_code=403, content={"status": "forbidden"})
-    codigo = sheets.codigo_activacion_pendiente(nombre)
+    try:
+        codigo = sheets.codigo_activacion_pendiente(nombre)
+    except Exception as e:
+        print(f"[codigo-activacion] error consultando código: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detalle": str(e)})
     if not codigo:
         return JSONResponse(
             status_code=404,
@@ -141,10 +159,22 @@ def obtener_codigo_activacion(secret: str = "", nombre: str = ""):
 
 @app.post("/api/chat")
 def chat(mensaje: MensajeIn):
-    if mensaje.tecnico not in sheets.listar_tecnicos():
-        return {"respuestas": ["Técnico no reconocido. Recarga la página e intenta de nuevo."]}
+    try:
+        tecnicos_validos = sheets.listar_tecnicos()
+    except Exception:
+        from app.config import TECNICOS
+        tecnicos_validos = TECNICOS
+
+    if mensaje.tecnico not in tecnicos_validos:
+        return {
+            "respuestas": ["Técnico no reconocido. Recarga la página e intenta de nuevo."],
+            "opciones": [],
+            "esperando": None,
+        }
     respuestas = procesar_mensaje_web(mensaje.tecnico, mensaje.texto)
-    return {"respuestas": respuestas}
+    estado = get_estado(mensaje.tecnico)
+    opciones = CATALOGOS_POR_ESTADO.get(estado.esperando, [])
+    return {"respuestas": respuestas, "opciones": opciones, "esperando": estado.esperando}
 
 
 # Webhook para Telegram Bot
@@ -156,7 +186,10 @@ async def telegram_webhook(request: Request):
             print(f"[telegram] secret_token no coincide. Recibido={header!r}")
             return JSONResponse(status_code=403, content={"status": "forbidden"})
 
-    update = await request.json()
+    try:
+        update = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"status": "invalid_json"})
 
     if "message" in update:
         message = update["message"]
@@ -214,7 +247,6 @@ def _manejar_foto(message: dict):
         tg.send_text(chat_id, f"No pude subir la evidencia. Error: {e}")
 
 
-
 def _tecnico_de(chat_id: int) -> str | None:
     """Técnico identificado en este chat. SESIONES es solo una caché en
     memoria (se pierde si el bot se reinicia); la fuente de verdad durable
@@ -223,15 +255,22 @@ def _tecnico_de(chat_id: int) -> str | None:
     tecnico = SESIONES.get(chat_id)
     if tecnico:
         return tecnico
-    tecnico = sheets.tecnico_por_chat_id(chat_id)
-    if tecnico:
-        SESIONES[chat_id] = tecnico
+    try:
+        tecnico = sheets.tecnico_por_chat_id(chat_id)
+        if tecnico:
+            SESIONES[chat_id] = tecnico
+    except Exception as e:
+        print(f"[auth] error consultando técnico por chat_id: {e}")
     return tecnico
 
 
 def _manejar_mensaje(message: dict):
     chat_id = message["chat"]["id"]
     texto = message.get("text", "")
+
+    if not texto.strip():
+        tg.send_text(chat_id, "Por ahora solo proceso mensajes de texto y fotos de evidencia.")
+        return
 
     if texto.startswith("/start"):
         _manejar_start(chat_id, texto)
@@ -265,15 +304,6 @@ def _manejar_mensaje(message: dict):
 
 
 def _manejar_start(chat_id: int, texto: str):
-    """/start [código]. Tres casos:
-    1. Este chat ya está vinculado a un técnico (columna Chat ID de
-       'Técnicos') — lo re-identifica sin pedir nada.
-    2. Trae un código de activación válido — vincula este chat a ese
-       técnico para siempre (lo consume, no sirve dos veces) y lo identifica.
-    3. Cualquier otro caso — no hay forma de identificarse sin un código
-       real, así que no se ofrece ninguna lista de nombres para elegir (eso
-       es justo lo que permitiría a cualquiera hacerse pasar por otro
-       técnico)."""
     tecnico_existente = _tecnico_de(chat_id)
     if tecnico_existente:
         tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Usa los botones o escribe libremente.")
@@ -289,7 +319,13 @@ def _manejar_start(chat_id: int, texto: str):
         )
         return
 
-    nombre = sheets.activar_tecnico_por_codigo(codigo, chat_id)
+    try:
+        nombre = sheets.activar_tecnico_por_codigo(codigo, chat_id)
+    except Exception as e:
+        print(f"[start] error activando técnico: {e}")
+        tg.send_text(chat_id, "Hubo un error de conexión con la base de datos. Intenta más tarde.", con_teclado=False)
+        return
+
     if not nombre:
         tg.send_text(chat_id, "Código inválido o ya usado. Pídele al admin un código nuevo.", con_teclado=False)
         return
@@ -299,10 +335,6 @@ def _manejar_start(chat_id: int, texto: str):
 
 
 def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
-    """/nuevo_tecnico Nombre Completo — solo ADMIN_TECNICOS. Da de alta un
-    técnico en la hoja 'Técnicos' del Sheet con un código de activación de
-    un solo uso; el admin se lo reenvía al técnico por fuera del bot
-    (WhatsApp, en persona) para que active su cuenta con /start CÓDIGO."""
     if tecnico not in ADMIN_TECNICOS:
         tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
         return
@@ -310,7 +342,13 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
     if not nombre:
         tg.send_text(chat_id, "Usa: /nuevo_tecnico Nombre Completo", con_teclado=False)
         return
-    codigo = sheets.agregar_tecnico(nombre)
+    try:
+        codigo = sheets.agregar_tecnico(nombre)
+    except Exception as e:
+        print(f"[nuevo_tecnico] error: {e}")
+        tg.send_text(chat_id, f"Error al agregar técnico: {e}")
+        return
+
     if not codigo:
         tg.send_text(chat_id, f"{nombre} ya estaba en la lista de técnicos.")
         return
@@ -323,10 +361,6 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
 
 
 def _admin_generar_reporte(chat_id: int, tecnico: str, texto: str):
-    """/reporte [AAAA-MM-DD AAAA-MM-DD] — solo ADMIN_TECNICOS. Fija el
-    periodo del reporte contractual en 'Reporte PDF'; las fórmulas de esa
-    hoja recalculan solas. El PDF real se descarga desde Google Sheets
-    (Archivo > Descargar > PDF) — el bot no genera el archivo."""
     if tecnico not in ADMIN_TECNICOS:
         tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
         return
@@ -344,10 +378,16 @@ def _admin_generar_reporte(chat_id: int, tecnico: str, texto: str):
     except ValueError:
         tg.send_text(chat_id, "Usa: /reporte  o  /reporte AAAA-MM-DD AAAA-MM-DD", con_teclado=False)
         return
-    sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+
+    try:
+        sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+    except Exception as e:
+        print(f"[reporte] error: {e}")
+        tg.send_text(chat_id, f"Error actualizando el reporte en Sheets: {e}", con_teclado=False)
+        return
+
     tg.send_text(
         chat_id,
         f"Reporte listo para el periodo {fecha_inicio.isoformat()} a {fecha_fin.isoformat()}. "
         "Descárgalo desde Google Sheets: hoja 'Reporte PDF' > Archivo > Descargar > PDF.",
     )
-

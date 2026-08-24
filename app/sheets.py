@@ -80,7 +80,7 @@ from app.config import (
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
+SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
 CREDENTIALS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials.json")
 WORKSHEET_NAME = os.environ.get("GOOGLE_WORKSHEET_NAME", "Registro de Tickets")
@@ -240,7 +240,7 @@ def _formula_no(row: int) -> str:
 def _formula_duracion(row: int) -> str:
     c_inicio = _letra(COL_HORA_INICIO)
     c_fin = _letra(COL_HORA_FIN)
-    return f'=IF({c_fin}{row}="","",{c_fin}{row}-{c_inicio}{row})'
+    return f'=IF(OR({c_fin}{row}="",{c_inicio}{row}=""),"",IF({c_fin}{row}>={c_inicio}{row},{c_fin}{row}-{c_inicio}{row},1+{c_fin}{row}-{c_inicio}{row}))'
 
 
 def _formula_rank_periodo(row: int) -> str:
@@ -590,6 +590,10 @@ def _get_worksheet():
     global _client, _worksheet, _tecnicos_ws
     if _worksheet is not None:
         return _worksheet
+    if not SHEET_ID:
+        raise RuntimeError(
+            "No se ha configurado GOOGLE_SHEET_ID en las variables de entorno."
+        )
     creds = _load_credentials()
     _client = gspread.authorize(creds)
     sh = _client.open_by_key(SHEET_ID)
@@ -689,18 +693,29 @@ def set_periodo_reporte(fecha_inicio: dt.date, fecha_fin: dt.date) -> None:
     ws_registro = _get_worksheet()
     sh = ws_registro.spreadsheet
     ws = sh.worksheet(REPORTE_PDF_WORKSHEET_NAME)
-    ws.update("C13", [[fecha_inicio.strftime("%Y-%m-%d")]], value_input_option="USER_ENTERED")
-    ws.update("E13", [[fecha_fin.strftime("%Y-%m-%d")]], value_input_option="USER_ENTERED")
-    ws.update("B6", [[_ahora().strftime("%Y-%m-%d")]], value_input_option="USER_ENTERED")
+    ws.update([[fecha_inicio.strftime("%Y-%m-%d")]], "C13", value_input_option="USER_ENTERED")
+    ws.update([[fecha_fin.strftime("%Y-%m-%d")]], "E13", value_input_option="USER_ENTERED")
+    ws.update([[_ahora().strftime("%Y-%m-%d")]], "B6", value_input_option="USER_ENTERED")
 
 
 def _next_folio() -> str:
     """Folio/ticket interno correlativo: FOLIO-0001, FOLIO-0002, ... (se usa
-    cuando la actividad no trae un número de ticket real)."""
+    cuando la actividad no trae un número de ticket real). Busca el mayor
+    número correlativo existente para evitar colisiones."""
     ws = _get_worksheet()
     col = ws.col_values(COL_FOLIO)
     reales = col[3:]  # fila1=título, fila2=encabezado, fila3=ejemplo
-    return f"FOLIO-{len(reales) + 1:04d}"
+    max_num = 0
+    for val in reales:
+        if val and str(val).startswith("FOLIO-"):
+            try:
+                num = int(str(val).split("-")[1])
+                if num > max_num:
+                    max_num = num
+            except (ValueError, IndexError):
+                pass
+    siguiente = max(max_num + 1, len(reales) + 1)
+    return f"FOLIO-{siguiente:04d}"
 
 
 def _find_row_by_folio(folio: str) -> Optional[int]:

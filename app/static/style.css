@@ -147,8 +147,30 @@ html, body {
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
+  transition: all 0.15s ease;
 }
 .chip:hover, .chip:focus-visible { border-color: var(--acento); outline: none; }
+.chip-opcion {
+  background: #1f344d;
+  border-color: #3b5a82;
+  color: #79b8ff;
+  font-weight: 500;
+}
+.chip-opcion:hover {
+  background: #274567;
+  border-color: #58a6ff;
+  color: #ffffff;
+}
+.chip-cancelar {
+  background: #3b2024;
+  border-color: #632d34;
+  color: #f88a99;
+}
+.chip-cancelar:hover {
+  background: #50272d;
+  border-color: #ea4c62;
+  color: #ffffff;
+}
 
 .entrada {
   display: flex;

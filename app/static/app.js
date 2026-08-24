@@ -10,6 +10,41 @@ const accionesRapidas = document.getElementById("acciones-rapidas");
 
 let tecnicoActual = localStorage.getItem("fieldti_tecnico") || null;
 
+const CHIPS_DEFAULT = [
+  { texto: "+ Nueva actividad", valor: "nueva actividad" },
+  { texto: "⏸ Pausar", valor: "pausar" },
+  { texto: "▶ Reanudar", valor: "reanudar" },
+  { texto: "✓ Finalizar", valor: "finalizar" },
+  { texto: "☰ Mis actividades", valor: "mis actividades" },
+];
+
+function renderizarChips(opciones = []) {
+  accionesRapidas.innerHTML = "";
+  if (opciones && opciones.length > 0) {
+    opciones.forEach((op) => {
+      const btn = document.createElement("button");
+      btn.className = "chip chip-opcion";
+      btn.dataset.texto = op;
+      btn.textContent = op;
+      accionesRapidas.appendChild(btn);
+    });
+    // Agregar chip de cancelar cuando hay opciones activas
+    const btnCancel = document.createElement("button");
+    btnCancel.className = "chip chip-cancelar";
+    btnCancel.dataset.texto = "cancelar";
+    btnCancel.textContent = "✕ Cancelar";
+    accionesRapidas.appendChild(btnCancel);
+  } else {
+    CHIPS_DEFAULT.forEach((item) => {
+      const btn = document.createElement("button");
+      btn.className = "chip";
+      btn.dataset.texto = item.valor;
+      btn.textContent = item.texto;
+      accionesRapidas.appendChild(btn);
+    });
+  }
+}
+
 function agregarBurbuja(texto, tipo) {
   const div = document.createElement("div");
   div.className = `burbuja ${tipo}`;
@@ -20,16 +55,20 @@ function agregarBurbuja(texto, tipo) {
 }
 
 async function cargarTecnicos() {
-  const res = await fetch("/api/tecnicos");
-  const data = await res.json();
-  listaTecnicos.innerHTML = "";
-  data.tecnicos.forEach((nombre) => {
-    const btn = document.createElement("button");
-    btn.className = "btn-tecnico";
-    btn.textContent = nombre;
-    btn.onclick = () => entrarComo(nombre);
-    listaTecnicos.appendChild(btn);
-  });
+  try {
+    const res = await fetch("/api/tecnicos");
+    const data = await res.json();
+    listaTecnicos.innerHTML = "";
+    (data.tecnicos || []).forEach((nombre) => {
+      const btn = document.createElement("button");
+      btn.className = "btn-tecnico";
+      btn.textContent = nombre;
+      btn.onclick = () => entrarComo(nombre);
+      listaTecnicos.appendChild(btn);
+    });
+  } catch (err) {
+    console.error("Error al cargar técnicos:", err);
+  }
 }
 
 function entrarComo(nombre) {
@@ -39,6 +78,7 @@ function entrarComo(nombre) {
   pantallaLogin.classList.add("oculto");
   pantallaChat.classList.remove("oculto");
   mensajesEl.innerHTML = "";
+  renderizarChips();
   agregarBurbuja(`Hola, ${nombre.split(" ")[0]}. Usa los botones de abajo o escribe libremente.`, "bot");
   inputTexto.focus();
 }
@@ -56,6 +96,7 @@ async function mandarMensaje(texto) {
     const data = await res.json();
     cargando.remove();
     (data.respuestas || []).forEach((r) => agregarBurbuja(r, "bot"));
+    renderizarChips(data.opciones || []);
   } catch (err) {
     cargando.remove();
     agregarBurbuja("No pude conectar con el servidor. Revisa tu conexión e intenta de nuevo.", "bot");
