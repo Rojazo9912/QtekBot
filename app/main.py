@@ -6,6 +6,7 @@ Comando de inicio: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 """
 import datetime as dt
 import os
+import re
 from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
