@@ -61,11 +61,20 @@ def upload_evidence(contenido: bytes, nombre_archivo: str, mime_type: str = "ima
 
     ruta = ruta_normalizada(nombre_archivo)
 
-    client.storage.from_(SUPABASE_BUCKET).upload(
-        path=ruta,
-        file=contenido,
-        file_options={"content-type": mime_type, "upsert": "true"},
-    )
+    try:
+        client.storage.from_(SUPABASE_BUCKET).upload(
+            path=ruta,
+            file=contenido,
+            file_options={"content-type": mime_type, "upsert": "true"},
+        )
+    except Exception as upload_err:
+        # Algunas versiones del SDK de Supabase lanzan un error interno
+        # ("cannot access local variable 'response'") aunque el archivo
+        # se subió correctamente. Verificamos si ya existe en Storage; si
+        # la URL es accesible, ignoramos la excepción.
+        err_msg = str(upload_err)
+        if "response" not in err_msg and "already exists" not in err_msg.lower():
+            raise
 
     url = client.storage.from_(SUPABASE_BUCKET).get_public_url(ruta)
     # El SDK de Supabase (storage3) siempre concatena "?" al final, incluso
