@@ -178,8 +178,8 @@ HEADERS_REGISTRO = [
 ]
 
 FILA_EJEMPLO = [
-    "", "Infraestructura", "EJEMPLO-0001", "2026-01-01", "Media",
-    "Oficina Central", "Técnico de Ejemplo", "2026-01-01", "09:00:00",
+    "", "Infraestructura", "EJEMPLO-0001", "2000-01-01", "Media",
+    "Oficina Central", "Técnico de Ejemplo", "2000-01-01", "09:00:00",
     "10:30:00", "", "Falla de red", "Switch principal sin enlace a internet",
     "Se reinició el switch y se revisó el cableado", "Juan Pérez",
     "Revisar cableado de red periódicamente", "", "Cerrado", "", "",
