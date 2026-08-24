@@ -10,7 +10,7 @@ import httpx
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 API_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
 
-# Teclado persistente con los atajos, equivalente a los "chips" de la web app.
+# Teclado persistente para técnicos estándar
 TECLADO_ACCIONES = {
     "keyboard": [
         [{"text": "+ Nueva actividad"}, {"text": "⏸ Pausar"}],
@@ -21,14 +21,42 @@ TECLADO_ACCIONES = {
     "is_persistent": True,
 }
 
-# Los botones de arriba mandan su texto visible tal cual; lo normalizamos aquí
-# para que bot_logic reciba algo limpio ("nueva actividad", no "+ Nueva actividad").
+# Teclado persistente exclusivo para administradores
+TECLADO_ADMIN = {
+    "keyboard": [
+        [{"text": "+ Nueva actividad"}, {"text": "⏸ Pausar"}],
+        [{"text": "▶ Reanudar"}, {"text": "✓ Finalizar"}],
+        [{"text": "☰ Mis actividades"}],
+        [{"text": "👤 + Nuevo técnico"}, {"text": "📄 Reporte PDF"}],
+    ],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
+# Mapeo de botones y frases comunes a comandos limpios para bot_logic
 ALIAS_BOTONES = {
     "+ nueva actividad": "nueva actividad",
     "⏸ pausar": "pausar",
     "▶ reanudar": "reanudar",
     "✓ finalizar": "finalizar",
     "☰ mis actividades": "mis actividades",
+    "👤 + nuevo técnico": "nuevo tecnico",
+    "👤 + nuevo tecnico": "nuevo tecnico",
+    "+ nuevo técnico": "nuevo tecnico",
+    "+ nuevo tecnico": "nuevo tecnico",
+    "nuevo técnico": "nuevo tecnico",
+    "nuevo tecnico": "nuevo tecnico",
+    "dar de alta a un usuario": "nuevo tecnico",
+    "dar de alta usuario": "nuevo tecnico",
+    "dar de alta": "nuevo tecnico",
+    "agregar técnico": "nuevo tecnico",
+    "agregar tecnico": "nuevo tecnico",
+    "📄 reporte pdf": "reporte pdf",
+    "reporte pdf": "reporte pdf",
+    "generar reporte": "reporte pdf",
+    "reporte": "reporte pdf",
+    "comandos": "ayuda",
+    "ayuda": "ayuda",
 }
 
 
@@ -36,13 +64,13 @@ def normalizar_texto_boton(texto: str) -> str:
     return ALIAS_BOTONES.get(texto.strip().lower(), texto)
 
 
-def send_text(chat_id: int, texto: str, con_teclado: bool = True) -> None:
+def send_text(chat_id: int, texto: str, con_teclado: bool = True, es_admin: bool = False) -> None:
     if not TOKEN:
         print("[telegram] AVISO: TELEGRAM_BOT_TOKEN no está configurado.")
         return
     payload = {"chat_id": chat_id, "text": texto}
     if con_teclado:
-        payload["reply_markup"] = TECLADO_ACCIONES
+        payload["reply_markup"] = TECLADO_ADMIN if es_admin else TECLADO_ACCIONES
     try:
         with httpx.Client(timeout=10) as http:
             r = http.post(f"{API_URL}/sendMessage", json=payload)

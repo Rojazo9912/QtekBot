@@ -9,13 +9,20 @@ const btnCambiar = document.getElementById("btn-cambiar");
 const accionesRapidas = document.getElementById("acciones-rapidas");
 
 let tecnicoActual = localStorage.getItem("fieldti_tecnico") || null;
+let esAdminActual = localStorage.getItem("fieldti_es_admin") === "true";
 
-const CHIPS_DEFAULT = [
+const CHIPS_TECNICO = [
   { texto: "+ Nueva actividad", valor: "nueva actividad" },
   { texto: "⏸ Pausar", valor: "pausar" },
   { texto: "▶ Reanudar", valor: "reanudar" },
   { texto: "✓ Finalizar", valor: "finalizar" },
   { texto: "☰ Mis actividades", valor: "mis actividades" },
+];
+
+const CHIPS_ADMIN = [
+  ...CHIPS_TECNICO,
+  { texto: "👤 + Nuevo técnico", valor: "nuevo tecnico" },
+  { texto: "📄 Reporte PDF", valor: "reporte pdf" },
 ];
 
 function renderizarChips(opciones = []) {
@@ -35,7 +42,8 @@ function renderizarChips(opciones = []) {
     btnCancel.textContent = "✕ Cancelar";
     accionesRapidas.appendChild(btnCancel);
   } else {
-    CHIPS_DEFAULT.forEach((item) => {
+    const lista = esAdminActual ? CHIPS_ADMIN : CHIPS_TECNICO;
+    lista.forEach((item) => {
       const btn = document.createElement("button");
       btn.className = "chip";
       btn.dataset.texto = item.valor;
@@ -81,6 +89,19 @@ function entrarComo(nombre) {
   renderizarChips();
   agregarBurbuja(`Hola, ${nombre.split(" ")[0]}. Usa los botones de abajo o escribe libremente.`, "bot");
   inputTexto.focus();
+
+  // Consultar rol de admin con un ping silencioso
+  fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tecnico: nombre, texto: "mis actividades" }),
+  }).then(r => r.json()).then(data => {
+    if (data && typeof data.es_admin === "boolean") {
+      esAdminActual = data.es_admin;
+      localStorage.setItem("fieldti_es_admin", esAdminActual);
+      renderizarChips();
+    }
+  }).catch(() => {});
 }
 
 async function mandarMensaje(texto) {
@@ -95,6 +116,10 @@ async function mandarMensaje(texto) {
     });
     const data = await res.json();
     cargando.remove();
+    if (typeof data.es_admin === "boolean") {
+      esAdminActual = data.es_admin;
+      localStorage.setItem("fieldti_es_admin", esAdminActual);
+    }
     (data.respuestas || []).forEach((r) => agregarBurbuja(r, "bot"));
     renderizarChips(data.opciones || []);
   } catch (err) {
@@ -118,7 +143,9 @@ accionesRapidas.addEventListener("click", (e) => {
 
 btnCambiar.addEventListener("click", () => {
   localStorage.removeItem("fieldti_tecnico");
+  localStorage.removeItem("fieldti_es_admin");
   tecnicoActual = null;
+  esAdminActual = false;
   pantallaChat.classList.add("oculto");
   pantallaLogin.classList.remove("oculto");
 });

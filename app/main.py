@@ -45,6 +45,12 @@ CATALOGOS_POR_ESTADO = {
     "area": CATALOGO_AREA,
     "tipo_falla": CATALOGO_TIPO_FALLA,
     "prioridad": CATALOGO_PRIORIDAD,
+    "hora_inicio": ["Ahora", "7:00 am", "8:00 am", "Hace 1 hora", "Hace 2 horas"],
+    "duracion": ["30 min", "1 hora", "1h 30m", "2 horas", "3 horas", "Ahora"],
+    "evidencias": ["Listo", "Sin fotos"],
+    "recomendaciones": ["Ninguna"],
+    "materiales": ["No"],
+    "admin_periodo_reporte": ["Semana actual", "Semana pasada", "Personalizado"],
 }
 
 
@@ -170,11 +176,18 @@ def chat(mensaje: MensajeIn):
             "respuestas": ["Técnico no reconocido. Recarga la página e intenta de nuevo."],
             "opciones": [],
             "esperando": None,
+            "es_admin": False,
         }
     respuestas = procesar_mensaje_web(mensaje.tecnico, mensaje.texto)
     estado = get_estado(mensaje.tecnico)
     opciones = CATALOGOS_POR_ESTADO.get(estado.esperando, [])
-    return {"respuestas": respuestas, "opciones": opciones, "esperando": estado.esperando}
+    es_admin = mensaje.tecnico in ADMIN_TECNICOS
+    return {
+        "respuestas": respuestas,
+        "opciones": opciones,
+        "esperando": estado.esperando,
+        "es_admin": es_admin,
+    }
 
 
 # Webhook para Telegram Bot
@@ -208,13 +221,14 @@ def _manejar_foto(message: dict):
     """
     chat_id = message["chat"]["id"]
     tecnico = _tecnico_de(chat_id)
+    es_admin = tecnico in ADMIN_TECNICOS if tecnico else False
     if not tecnico:
         tg.send_text(chat_id, "Primero manda /start <código> para identificarte.", con_teclado=False)
         return
 
     estado = get_estado(tecnico)
     if not estado.folio_activo:
-        tg.send_text(chat_id, "No tienes ninguna actividad activa a la cual adjuntar esta evidencia. Inicia o reanuda una actividad primero.")
+        tg.send_text(chat_id, "No tienes ninguna actividad activa a la cual adjuntar esta evidencia. Inicia o reanuda una actividad primero.", es_admin=es_admin)
         return
 
     tg.send_text(chat_id, "Subiendo evidencia…", con_teclado=False)
@@ -227,7 +241,7 @@ def _manejar_foto(message: dict):
             file_id = doc["file_id"]
             mime_type = doc.get("mime_type", "application/octet-stream")
         else:
-            tg.send_text(chat_id, "Tipo de archivo no soportado como evidencia.")
+            tg.send_text(chat_id, "Tipo de archivo no soportado como evidencia.", es_admin=es_admin)
             return
 
         contenido, file_path = tg.descargar_archivo(file_id)
@@ -239,12 +253,12 @@ def _manejar_foto(message: dict):
         guardado = sheets.add_evidence(estado.folio_activo, url, mime_type=mime_type, link_miniatura=url_miniatura)
 
         if guardado:
-            tg.send_text(chat_id, f"Evidencia guardada en la actividad {estado.folio_activo}. ✅")
+            tg.send_text(chat_id, f"Evidencia guardada en la actividad {estado.folio_activo}. ✅", es_admin=es_admin)
         else:
-            tg.send_text(chat_id, f"La evidencia se subió, pero no encontré la fila del folio {estado.folio_activo} en el Sheet. Link: {url}")
+            tg.send_text(chat_id, f"La evidencia se subió, pero no encontré la fila del folio {estado.folio_activo} en el Sheet. Link: {url}", es_admin=es_admin)
     except Exception as e:
         print(f"[evidencia] error subiendo evidencia: {e}")
-        tg.send_text(chat_id, f"No pude subir la evidencia. Error: {e}")
+        tg.send_text(chat_id, f"No pude subir la evidencia. Error: {e}", es_admin=es_admin)
 
 
 def _tecnico_de(chat_id: int) -> str | None:
@@ -281,6 +295,8 @@ def _manejar_mensaje(message: dict):
         tg.send_text(chat_id, "Primero manda /start <código> para identificarte.", con_teclado=False)
         return
 
+    es_admin = tecnico in ADMIN_TECNICOS
+
     if texto.startswith("/nuevo_tecnico"):
         _admin_nuevo_tecnico(chat_id, tecnico, texto)
         return
@@ -294,19 +310,20 @@ def _manejar_mensaje(message: dict):
         return
 
     for r in respuestas[:-1]:
-        tg.send_text(chat_id, r)
+        tg.send_text(chat_id, r, es_admin=es_admin)
 
     opciones = CATALOGOS_POR_ESTADO.get(get_estado(tecnico).esperando)
     if opciones:
         tg.send_opciones(chat_id, respuestas[-1], opciones)
     else:
-        tg.send_text(chat_id, respuestas[-1])
+        tg.send_text(chat_id, respuestas[-1], es_admin=es_admin)
 
 
 def _manejar_start(chat_id: int, texto: str):
     tecnico_existente = _tecnico_de(chat_id)
     if tecnico_existente:
-        tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Usa los botones o escribe libremente.")
+        es_admin = tecnico_existente in ADMIN_TECNICOS
+        tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Usa los botones o escribe libremente.", es_admin=es_admin)
         return
 
     partes = texto.split(maxsplit=1)
@@ -331,7 +348,8 @@ def _manejar_start(chat_id: int, texto: str):
         return
 
     SESIONES[chat_id] = nombre
-    tg.send_text(chat_id, f"Hola, {nombre.split(' ')[0]}. Tu cuenta quedó activada. Usa los botones o escribe libremente.")
+    es_admin = nombre in ADMIN_TECNICOS
+    tg.send_text(chat_id, f"Hola, {nombre.split(' ')[0]}. Tu cuenta quedó activada. Usa los botones o escribe libremente.", es_admin=es_admin)
 
 
 def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):

@@ -724,21 +724,30 @@ def _find_row_by_folio(folio: str) -> Optional[int]:
     return cell.row if cell else None
 
 
+def obtener_hora_inicio(folio: str) -> Optional[str]:
+    """Obtiene la Hora Inicio guardada para un folio (columna I)."""
+    row_idx = _find_row_by_folio(folio)
+    if not row_idx:
+        return None
+    ws = _get_worksheet()
+    return ws.cell(row_idx, COL_HORA_INICIO).value
+
+
 def start_activity(
     tecnico: str, ticket: Optional[str], area: str, ubicacion: str, problema: str,
-    tipo_falla: str, prioridad: str,
+    tipo_falla: str, prioridad: str, hora_inicio: Optional[str] = None,
 ) -> str:
     """Crea una fila nueva en 'Registro de Tickets'. Devuelve el folio (o el
-    ticket si existía). Fecha Recepción y Fecha Inicio quedan iguales (hoy):
-    el bot no distingue el momento en que se recibió el reporte del momento
-    en que el técnico empieza a atenderlo."""
+    ticket si existía). Permite especificar una hora_inicio personalizada (HH:MM:SS)
+    o usa la hora actual por defecto."""
     ws = _get_worksheet()
     folio = ticket if ticket else _next_folio()
     now = _ahora()
     fecha = now.strftime("%Y-%m-%d")
+    hora_ini = hora_inicio if hora_inicio else now.strftime("%H:%M:%S")
     row = [
         "", area, folio, fecha, prioridad, ubicacion, tecnico, fecha,
-        now.strftime("%H:%M:%S"), "", "", tipo_falla, problema, "", "", "",
+        hora_ini, "", "", tipo_falla, problema, "", "", "",
         "", ESTATUS_EN_PROCESO, "", "", "", "", "", "",
     ]
     ws.append_row(row, value_input_option="USER_ENTERED")
@@ -752,20 +761,22 @@ def start_activity(
 
 def finish_activity(
     folio: str, solucion: str, recomendaciones: str, receptor: str,
-    materiales: str = "",
+    materiales: str = "", hora_fin: Optional[str] = None,
 ) -> bool:
+    """Cierra la actividad en el Sheet. Permite especificar una hora_fin
+    calculada o personalizada (HH:MM:SS) o usa la hora actual."""
     row_idx = _find_row_by_folio(folio)
     if not row_idx:
         return False
     ws = _get_worksheet()
-    now = _ahora().strftime("%H:%M:%S")
+    hora_cierre = hora_fin if hora_fin else _ahora().strftime("%H:%M:%S")
 
     recomendaciones_final = recomendaciones
     if materiales:
         extra = f"Materiales/repuestos usados: {materiales}"
         recomendaciones_final = f"{recomendaciones}\n{extra}".strip() if recomendaciones else extra
 
-    ws.update_cell(row_idx, COL_HORA_FIN, now)
+    ws.update_cell(row_idx, COL_HORA_FIN, hora_cierre)
     ws.update_cell(row_idx, COL_ESTATUS, ESTATUS_CERRADO)
     ws.update_cell(row_idx, COL_SOLUCION, solucion)
     ws.update_cell(row_idx, COL_ENTREGADO_A, receptor)
