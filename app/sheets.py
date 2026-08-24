@@ -78,7 +78,13 @@ from app.config import (
     CONTRATO_INFO, TECNICOS, TECNICOS_INFO,
 )
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+import httpx
+import google.auth.transport.requests
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
 
 SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
 CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
@@ -246,19 +252,23 @@ def _formula_duracion(row: int) -> str:
 def _formula_rank_periodo(row: int) -> str:
     """SUMPRODUCT en vez de COUNTIFS (ver docstring del módulo): cuenta,
     entre la fila 4 y esta fila, cuántos tickets tienen Fecha Inicio dentro
-    del periodo activo en 'Reporte PDF'!C13:E13 — ese conteo es el rank que
-    usa la tabla de Actividades para traer los tickets del periodo con
-    INDEX/MATCH simple."""
+    del periodo activo en 'Reporte PDF'!C13:E13 y que coincidan con el Área
+    en G13 (o todos si G13='Todos' o vacío)."""
     c_folio = _letra(COL_FOLIO)
     c_fecha = _letra(COL_FECHA_INICIO)
+    c_area = _letra(COL_AREA)
     rango_fecha = f"${c_fecha}$4:${c_fecha}{row}"
     rango_folio = f"${c_folio}$4:${c_folio}{row}"
+    rango_area = f"${c_area}$4:${c_area}{row}"
     periodo_ini = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$C$13"
     periodo_fin = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$E$13"
+    filtro_area = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$G$13"
+    cond_area_fila = f"OR({filtro_area}=\"Todos\",{filtro_area}=\"\",{c_area}{row}={filtro_area})"
+    cond_area_rango = f"(({filtro_area}=\"Todos\")+({filtro_area}=\"\")+({rango_area}={filtro_area})>0)"
     return (
         f'=IF({c_folio}{row}="","",'
-        f'IF(AND({c_fecha}{row}<>"",{c_fecha}{row}>={periodo_ini},{c_fecha}{row}<={periodo_fin}),'
-        f'SUMPRODUCT(({rango_fecha}<>"")*({rango_fecha}>={periodo_ini})*({rango_fecha}<={periodo_fin})*({rango_folio}<>"")),'
+        f'IF(AND({c_fecha}{row}<>"",{c_fecha}{row}>={periodo_ini},{c_fecha}{row}<={periodo_fin},{cond_area_fila}),'
+        f'SUMPRODUCT(({rango_fecha}<>"")*({rango_fecha}>={periodo_ini})*({rango_fecha}<={periodo_fin})*({rango_folio}<>"")*{cond_area_rango}),'
         f'""))'
     )
 
@@ -498,7 +508,7 @@ def _ensure_reporte_pdf(sh) -> None:
         return f'=IFERROR(INDEX({_rango_registro(col_letra)}, MATCH({n_expr}, {_rango_registro(_letra(COL_RANK_PERIODO))}, 0)), "")'
 
     filas = [
-        ["REPORTE DE AVANCE DE SERVICIOS — Área de TI (Infraestructura y Soporte)"],
+        ['=IF(OR($G$13="Todos",$G$13=""), "REPORTE DE AVANCE DE SERVICIOS — Área de TI (Infraestructura y Soporte)", "REPORTE DE AVANCE DE SERVICIOS — Área de TI (" & $G$13 & ")")'],
         [],
         ["1. INFORMACIÓN GENERAL"],
         [],
@@ -510,14 +520,14 @@ def _ensure_reporte_pdf(sh) -> None:
         [],
         ["2. RESUMEN DE EJECUCIÓN (Cláusula 4.1)"],
         [],
-        ["Periodo del Reporte:", "Del:", "", "Al:", ""],
+        ["Periodo del Reporte:", "Del:", "", "Al:", "", "Área:", "Todos"],
         [],
         ["Avance Físico"],
         ["Concepto", "", "", "", "Valor"],
         [
             "% de Avance Real (calculado: Cerrados / total del periodo)", "", "", "",
-            f'=IFERROR(SUMPRODUCT(({_rango_registro(c_fecha_inicio)}>=$C$13)*({_rango_registro(c_fecha_inicio)}<=$E$13)*({_rango_registro(c_estatus)}="Cerrado"))'
-            f'/SUMPRODUCT(({_rango_registro(c_fecha_inicio)}>=$C$13)*({_rango_registro(c_fecha_inicio)}<=$E$13)*({_rango_registro(c_folio)}<>"")),"N/A")',
+            f'=IFERROR(SUMPRODUCT(({_rango_registro(c_fecha_inicio)}>=$C$13)*({_rango_registro(c_fecha_inicio)}<=$E$13)*({_rango_registro(c_estatus)}="Cerrado")*(($G$13="Todos")+($G$13="")+({_rango_registro(c_area)}=$G$13)>0))'
+            f'/SUMPRODUCT(({_rango_registro(c_fecha_inicio)}>=$C$13)*({_rango_registro(c_fecha_inicio)}<=$E$13)*({_rango_registro(c_folio)}<>"")*(($G$13="Todos")+($G$13="")+({_rango_registro(c_area)}=$G$13)>0)),"N/A")',
         ],
         ["% de Avance Programado (manual)", "", "", "", ""],
         ["Desviación", "", "", "", '=IFERROR(E17-E18,"")'],
@@ -564,7 +574,7 @@ def _ensure_reporte_pdf(sh) -> None:
             f'=IFERROR(INDEX({rango_tec_nombre}, {n_expr_personal}), "")',
             f'=IFERROR(INDEX({rango_tec_cargo}, {n_expr_personal}), "")',
             f'=IFERROR(INDEX({rango_tec_imss}, {n_expr_personal}), "")',
-            f'=IF(A{r}="","",SUMPRODUCT(({_rango_registro(c_tecnico)}=A{r})*({_rango_registro(c_fecha_inicio)}>=$C$13)*({_rango_registro(c_fecha_inicio)}<=$E$13)*({_rango_registro(c_folio)}<>"")))',
+            f'=IF(A{r}="","",SUMPRODUCT(({_rango_registro(c_tecnico)}=A{r})*({_rango_registro(c_fecha_inicio)}>=$C$13)*({_rango_registro(c_fecha_inicio)}<=$E$13)*({_rango_registro(c_folio)}<>"")*(($G$13="Todos")+($G$13="")+({_rango_registro(c_area)}=$G$13)>0)))',
             f'=IF(A{r}="","",IFERROR(INDEX({_rango_registro(c_area)},MATCH(A{r},{_rango_registro(c_tecnico)},0)),""))',
         ])
 
@@ -685,17 +695,56 @@ def tecnico_por_chat_id(chat_id: int) -> Optional[str]:
     return ws.cell(cell.row, COL_TEC_NOMBRE).value
 
 
-def set_periodo_reporte(fecha_inicio: dt.date, fecha_fin: dt.date) -> None:
-    """Fija el periodo del reporte contractual (celdas C13/E13 de 'Reporte
-    PDF'), la única entrada manual que controla todos los cálculos de esa
-    hoja. Pensado para que un admin de Qtek lo dispare a mano antes de
-    mandar el reporte a First Majestic."""
+def set_periodo_reporte(
+    fecha_inicio: dt.date, fecha_fin: dt.date, area: str = "Todos",
+) -> None:
+    """Fija el periodo y departamento/área del reporte contractual (celdas
+    C13/E13/G13 de 'Reporte PDF'), controlando todos los cálculos de esa hoja."""
     ws_registro = _get_worksheet()
     sh = ws_registro.spreadsheet
     ws = sh.worksheet(REPORTE_PDF_WORKSHEET_NAME)
     ws.update([[fecha_inicio.strftime("%Y-%m-%d")]], "C13", value_input_option="USER_ENTERED")
     ws.update([[fecha_fin.strftime("%Y-%m-%d")]], "E13", value_input_option="USER_ENTERED")
+    ws.update([[area]], "G13", value_input_option="USER_ENTERED")
     ws.update([[_ahora().strftime("%Y-%m-%d")]], "B6", value_input_option="USER_ENTERED")
+
+
+def exportar_reporte_pdf(area: str = "Todos") -> tuple[bytes, str]:
+    """Descarga la hoja 'Reporte PDF' como archivo binario PDF formateado
+    y listo para enviar o imprimir."""
+    ws_registro = _get_worksheet()
+    sh = ws_registro.spreadsheet
+    rep_ws = sh.worksheet(REPORTE_PDF_WORKSHEET_NAME)
+    gid = rep_ws.id
+
+    creds = _load_credentials()
+    auth_req = google.auth.transport.requests.Request()
+    creds.refresh(auth_req)
+
+    params = {
+        "format": "pdf",
+        "gid": str(gid),
+        "size": "letter",
+        "portrait": "true",
+        "fitw": "true",
+        "gridlines": "false",
+        "printtitle": "false",
+        "sheetnames": "false",
+        "fzr": "false",
+    }
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export"
+    token = creds.token
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with httpx.Client(timeout=45) as client:
+        r = client.get(url, params=params, headers=headers)
+        r.raise_for_status()
+        pdf_bytes = r.content
+
+    fecha_hoy = _ahora().strftime("%Y-%m-%d")
+    sufijo_area = "General" if area in ("Todos", "General", "") else area.replace(" ", "_")
+    nombre_archivo = f"Reporte_Avance_TI_{sufijo_area}_{fecha_hoy}.pdf"
+    return pdf_bytes, nombre_archivo
 
 
 def _next_folio() -> str:

@@ -102,6 +102,24 @@ def send_opciones(chat_id: int, texto: str, opciones: list[str]) -> None:
         print(f"[telegram] error enviando opciones: {e}")
 
 
+def send_document(chat_id: int, file_bytes: bytes, filename: str, caption: str = "") -> None:
+    """Envía un archivo adjunto (ej. documento PDF) al chat de Telegram."""
+    if not TOKEN:
+        print("[telegram] AVISO: TELEGRAM_BOT_TOKEN no está configurado.")
+        return
+    files = {"document": (filename, file_bytes, "application/pdf")}
+    data = {"chat_id": str(chat_id)}
+    if caption:
+        data["caption"] = caption
+    try:
+        with httpx.Client(timeout=45) as http:
+            r = http.post(f"{API_URL}/sendDocument", data=data, files=files)
+            if r.status_code >= 400:
+                print(f"[telegram] error enviando documento: {r.status_code} - {r.text}")
+    except Exception as e:
+        print(f"[telegram] error enviando documento: {e}")
+
+
 def set_webhook(url: str) -> dict:
     if not TOKEN:
         return {"ok": False, "description": "TELEGRAM_BOT_TOKEN no configurado"}

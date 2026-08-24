@@ -50,6 +50,7 @@ CATALOGOS_POR_ESTADO = {
     "evidencias": ["Listo", "Sin fotos"],
     "recomendaciones": ["Ninguna"],
     "materiales": ["No"],
+    "admin_tipo_reporte": ["General (Todos)", "Infraestructura", "Soporte", "Generar los 3 PDFs"],
     "admin_periodo_reporte": ["Semana actual", "Semana pasada", "Personalizado"],
 }
 
@@ -137,6 +138,21 @@ def fijar_periodo_reporte(secret: str = "", desde: str = "", hasta: str = ""):
             content={"status": "error", "detalle": f"Error al actualizar Google Sheets: {e}"},
         )
     return {"status": "ok", "periodo": f"{fecha_inicio.isoformat()} a {fecha_fin.isoformat()}"}
+
+
+@app.get("/api/descargar-reporte-pdf")
+def descargar_reporte_pdf(area: str = "Todos"):
+    """Descarga el archivo PDF del Reporte Contractual desde el navegador."""
+    try:
+        pdf_bytes, filename = sheets.exportar_reporte_pdf(area=area)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        print(f"[descargar-reporte-pdf] error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detalle": str(e)})
 
 
 @app.get("/api/codigo-activacion")
@@ -318,6 +334,60 @@ def _manejar_mensaje(message: dict):
     else:
         tg.send_text(chat_id, respuestas[-1], es_admin=es_admin)
 
+    # Si se actualizó el reporte, exportar y enviar el PDF automáticamente
+    reporte_msg = next((r for r in respuestas if "Reporte actualizado para el periodo" in r), None)
+    if reporte_msg:
+        if "Generando los 3 PDFs" in reporte_msg:
+            _enviar_3_pdfs_telegram(chat_id, reporte_msg, es_admin=es_admin)
+        else:
+            m_area = re.search(r"\(Área:\s*([^)]+)\)", reporte_msg)
+            area_sel = m_area.group(1).strip() if m_area else "Todos"
+            _enviar_pdf_telegram(chat_id, area=area_sel, es_admin=es_admin)
+
+
+def _enviar_pdf_telegram(chat_id: int, area: str = "Todos", es_admin: bool = False):
+    try:
+        tg.send_text(chat_id, f"Generando y descargando archivo PDF ({area})...", con_teclado=False)
+        pdf_bytes, filename = sheets.exportar_reporte_pdf(area=area)
+        tg.send_document(
+            chat_id,
+            pdf_bytes,
+            filename,
+            caption=f"📄 {filename}\nListo para enviar o imprimir.",
+        )
+    except Exception as e:
+        print(f"[telegram_pdf] error exportando PDF: {e}")
+        tg.send_text(chat_id, f"Aviso: El reporte se actualizó en Sheets, pero no pude generar el archivo PDF directo ({e}).", es_admin=es_admin)
+
+
+def _enviar_3_pdfs_telegram(chat_id: int, reporte_msg: str, es_admin: bool = False):
+    try:
+        m_fechas = re.search(r"periodo\s+(\d{4}-\d{2}-\d{2})\s+al\s+(\d{4}-\d{2}-\d{2})", reporte_msg)
+        if m_fechas:
+            f_ini = dt.date.fromisoformat(m_fechas.group(1))
+            f_fin = dt.date.fromisoformat(m_fechas.group(2))
+        else:
+            hoy = dt.datetime.now(sheets.ZONA_HORARIA).date()
+            f_ini = hoy - dt.timedelta(days=hoy.weekday())
+            f_fin = f_ini + dt.timedelta(days=6)
+
+        tg.send_text(chat_id, "Generando los 3 archivos PDF (General, Infraestructura y Soporte)...", con_teclado=False)
+        for area, rotulo in [
+            ("Todos", "🌐 Reporte General (Infraestructura y Soporte)"),
+            ("Infraestructura", "🏗️ Reporte Departamento de Infraestructura"),
+            ("Soporte", "💻 Reporte Departamento de Soporte"),
+        ]:
+            sheets.set_periodo_reporte(f_ini, f_fin, area=area)
+            pdf_bytes, filename = sheets.exportar_reporte_pdf(area=area)
+            tg.send_document(chat_id, pdf_bytes, filename, caption=f"{rotulo}\n📄 {filename}")
+
+        # Dejar la hoja en modo General (Todos)
+        sheets.set_periodo_reporte(f_ini, f_fin, area="Todos")
+        tg.send_text(chat_id, "✅ Los 3 reportes PDF fueron enviados con éxito.", es_admin=es_admin)
+    except Exception as e:
+        print(f"[telegram_3_pdfs] error: {e}")
+        tg.send_text(chat_id, f"Aviso: Hubo un problema al generar los 3 PDFs ({e}).", es_admin=es_admin)
+
 
 def _manejar_start(chat_id: int, texto: str):
     tecnico_existente = _tecnico_de(chat_id)
@@ -406,6 +476,6 @@ def _admin_generar_reporte(chat_id: int, tecnico: str, texto: str):
 
     tg.send_text(
         chat_id,
-        f"Reporte listo para el periodo {fecha_inicio.isoformat()} a {fecha_fin.isoformat()}. "
-        "Descárgalo desde Google Sheets: hoja 'Reporte PDF' > Archivo > Descargar > PDF.",
+        f"Reporte listo para el periodo {fecha_inicio.isoformat()} a {fecha_fin.isoformat()}.",
     )
+    _enviar_pdf_telegram(chat_id, es_admin=True)

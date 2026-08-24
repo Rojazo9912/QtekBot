@@ -251,6 +251,27 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             estado.esperando = None
         return respuestas
 
+    # Flujo de Administrador: Pidiendo Tipo / Departamento de Reporte
+    if estado.esperando == "admin_tipo_reporte":
+        t_norm = _remover_acentos(texto_limpio)
+        if t_norm in ("general (todos)", "general", "todos", "1", "ambos"):
+            estado.borrador["reporte_area"] = "Todos"
+        elif t_norm in ("infraestructura", "2"):
+            estado.borrador["reporte_area"] = "Infraestructura"
+        elif t_norm in ("soporte", "3"):
+            estado.borrador["reporte_area"] = "Soporte"
+        elif t_norm in ("generar los 3 pdfs", "los 3 pdfs", "los 3", "3 pdfs", "4", "todos los reportes"):
+            estado.borrador["reporte_area"] = "3_PDFS"
+        else:
+            decir("Elige una opción: 'General (Todos)', 'Infraestructura', 'Soporte' o 'Generar los 3 PDFs'.")
+            return respuestas
+
+        area_sel = estado.borrador["reporte_area"]
+        nombre_area = "los 3 PDFs" if area_sel == "3_PDFS" else f"Área: {area_sel}"
+        estado.esperando = "admin_periodo_reporte"
+        decir(f"Periodo para el reporte ({nombre_area}):\n¿Para qué periodo deseas generarlo?")
+        return respuestas
+
     # Flujo de Administrador: Pidiendo Periodo de Reporte
     if estado.esperando == "admin_periodo_reporte":
         t_norm = _remover_acentos(texto_limpio)
@@ -283,17 +304,24 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             decir("No entendí la opción. Elige 'Semana actual', 'Semana pasada' o escribe 'AAAA-MM-DD AAAA-MM-DD'.")
             return respuestas
 
+        area_sel = estado.borrador.get("reporte_area", "Todos")
+        estado.esperando = None
+        estado.borrador = {}
         try:
-            sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
-            estado.esperando = None
-            decir(
-                f"📊 Reporte actualizado para el periodo {fecha_inicio.isoformat()} al {fecha_fin.isoformat()}.\n\n"
-                "Ya puedes descargarlo desde Google Sheets en la hoja 'Reporte PDF' (Archivo > Descargar > Documento PDF)."
-            )
+            if area_sel == "3_PDFS":
+                decir(
+                    f"📊 Reporte actualizado para el periodo {fecha_inicio.isoformat()} al {fecha_fin.isoformat()} "
+                    "(Generando los 3 PDFs: General, Infraestructura y Soporte)..."
+                )
+            else:
+                sheets.set_periodo_reporte(fecha_inicio, fecha_fin, area=area_sel)
+                decir(
+                    f"📊 Reporte actualizado para el periodo {fecha_inicio.isoformat()} al {fecha_fin.isoformat()} (Área: {area_sel}).\n\n"
+                    "Ya puedes descargarlo desde Google Sheets en la hoja 'Reporte PDF' (Archivo > Descargar > Documento PDF)."
+                )
         except Exception as e:
             print(f"[bot_logic] error fijando periodo: {e}")
             decir(f"Hubo un error al actualizar el periodo en Google Sheets: {e}")
-            estado.esperando = None
         return respuestas
 
     # Flujo de Administrador: Pidiendo Fechas Personalizadas
@@ -303,12 +331,20 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             try:
                 fecha_inicio = dt.date.fromisoformat(partes[0])
                 fecha_fin = dt.date.fromisoformat(partes[1])
-                sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+                area_sel = estado.borrador.get("reporte_area", "Todos")
                 estado.esperando = None
-                decir(
-                    f"📊 Reporte actualizado para el periodo {fecha_inicio.isoformat()} al {fecha_fin.isoformat()}.\n\n"
-                    "Ya puedes descargarlo desde Google Sheets en la hoja 'Reporte PDF' (Archivo > Descargar > Documento PDF)."
-                )
+                estado.borrador = {}
+                if area_sel == "3_PDFS":
+                    decir(
+                        f"📊 Reporte actualizado para el periodo {fecha_inicio.isoformat()} al {fecha_fin.isoformat()} "
+                        "(Generando los 3 PDFs: General, Infraestructura y Soporte)..."
+                    )
+                else:
+                    sheets.set_periodo_reporte(fecha_inicio, fecha_fin, area=area_sel)
+                    decir(
+                        f"📊 Reporte actualizado para el periodo {fecha_inicio.isoformat()} al {fecha_fin.isoformat()} (Área: {area_sel}).\n\n"
+                        "Ya puedes descargarlo desde Google Sheets en la hoja 'Reporte PDF' (Archivo > Descargar > Documento PDF)."
+                    )
                 return respuestas
             except ValueError:
                 pass
@@ -590,8 +626,8 @@ def _ejecutar_intencion(estado, intencion: str, decir, ticket: str | None = None
         if not es_admin:
             decir("No tienes permisos de administrador para generar el reporte contractual.")
             return
-        estado.esperando = "admin_periodo_reporte"
-        decir("📄 ¿Para qué periodo deseas actualizar el reporte contractual en Google Sheets?\nElige una opción:")
+        estado.esperando = "admin_tipo_reporte"
+        decir("📄 ¿Qué tipo de reporte deseas generar?\nElige una opción:")
 
     elif intencion == "ayuda":
         lineas = [

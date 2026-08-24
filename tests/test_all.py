@@ -1,5 +1,6 @@
 """
-Suite de pruebas para validar todas las correcciones, modo offline y flujos de administración en QtekBot.
+Suite de pruebas para validar todas las correcciones, modo offline, flujos de administración,
+reportes por departamento y exportación PDF en QtekBot.
 """
 import unittest
 from unittest.mock import MagicMock, patch
@@ -144,31 +145,45 @@ class TestBotLogic(unittest.TestCase):
     def test_admin_flujo_nuevo_tecnico(self, mock_agregar):
         estado = get_estado("Miguel Abraham Lopez Ortiz")
 
-        # Iniciar alta interactiva
         resp = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "dar de alta a un usuario")
         self.assertEqual(estado.esperando, "admin_nombre_tecnico")
         self.assertIn("nombre completo", resp[0].lower())
 
-        # Enviar nombre
         resp2 = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "Isrrael Ramírez")
         self.assertIsNone(estado.esperando)
         mock_agregar.assert_called_once_with("Isrrael Ramírez")
         self.assertIn("/start xyz789", resp2[0].lower())
 
     @patch("app.sheets.set_periodo_reporte")
-    def test_admin_flujo_reporte_semana_actual(self, mock_set_rep):
+    def test_admin_flujo_reporte_por_departamento(self, mock_set_rep):
         estado = get_estado("Miguel Abraham Lopez Ortiz")
 
-        # Iniciar reporte interactivo
+        # 1. Iniciar reporte interactivo -> pregunta tipo
         resp = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "reporte pdf")
-        self.assertEqual(estado.esperando, "admin_periodo_reporte")
-        self.assertIn("periodo", resp[0].lower())
+        self.assertEqual(estado.esperando, "admin_tipo_reporte")
+        self.assertIn("tipo de reporte", resp[0].lower())
 
-        # Elegir semana actual
-        resp2 = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "Semana actual")
+        # 2. Elegir departamento -> pregunta periodo
+        resp2 = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "Infraestructura")
+        self.assertEqual(estado.esperando, "admin_periodo_reporte")
+        self.assertIn("periodo", resp2[0].lower())
+
+        # 3. Elegir semana actual -> fija periodo y área
+        resp3 = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "Semana actual")
         self.assertIsNone(estado.esperando)
         mock_set_rep.assert_called_once()
-        self.assertIn("actualizado", resp2[0].lower())
+        self.assertEqual(mock_set_rep.call_args.kwargs.get("area"), "Infraestructura")
+        self.assertIn("infraestructura", resp3[0].lower())
+
+    @patch("app.sheets.set_periodo_reporte")
+    def test_admin_flujo_reporte_3_pdfs(self, mock_set_rep):
+        estado = get_estado("Miguel Abraham Lopez Ortiz")
+
+        procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "reporte pdf")
+        procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "Generar los 3 PDFs")
+        resp = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "Semana actual")
+        self.assertIsNone(estado.esperando)
+        self.assertIn("los 3 pdfs", resp[0].lower())
 
     def test_no_admin_bloqueado(self):
         resp = procesar_mensaje_web("TecnicoEstandar", "nuevo tecnico")
@@ -182,12 +197,17 @@ class TestBotLogic(unittest.TestCase):
         self.assertNotIn("administrador", resp_tec[0].lower())
 
 
-class TestSheetsFormulas(unittest.TestCase):
+class TestSheetsExportAndFormulas(unittest.TestCase):
     def test_formula_duracion(self):
         formula = sheets._formula_duracion(4)
         self.assertIn("OR(", formula)
         self.assertIn("J4", formula)
         self.assertIn("I4", formula)
+
+    def test_formula_rank_periodo_con_filtro_area(self):
+        formula = sheets._formula_rank_periodo(4)
+        self.assertIn("$G$13", formula)
+        self.assertIn("Todos", formula)
 
     def test_next_folio_correlativo(self):
         with patch.object(sheets, "_get_worksheet") as mock_ws:
@@ -211,10 +231,46 @@ class TestSheetsFormulas(unittest.TestCase):
 
             ini = dt.date(2026, 1, 1)
             fin = dt.date(2026, 1, 7)
-            sheets.set_periodo_reporte(ini, fin)
+            sheets.set_periodo_reporte(ini, fin, area="Infraestructura")
 
             mock_rep_ws.update.assert_any_call([["2026-01-01"]], "C13", value_input_option="USER_ENTERED")
             mock_rep_ws.update.assert_any_call([["2026-01-07"]], "E13", value_input_option="USER_ENTERED")
+            mock_rep_ws.update.assert_any_call([["Infraestructura"]], "G13", value_input_option="USER_ENTERED")
+
+    @patch("app.sheets._load_credentials")
+    @patch("app.sheets._get_worksheet")
+    @patch("httpx.Client.get")
+    def test_exportar_reporte_pdf(self, mock_http_get, mock_get_ws, mock_load_creds):
+        mock_ws_reg = MagicMock()
+        mock_sh = MagicMock()
+        mock_rep_ws = MagicMock()
+        mock_rep_ws.id = 12345
+        mock_ws_reg.spreadsheet = mock_sh
+        mock_sh.worksheet.return_value = mock_rep_ws
+        mock_get_ws.return_value = mock_ws_reg
+
+        mock_creds = MagicMock()
+        mock_creds.token = "fake_token"
+        mock_load_creds.return_value = mock_creds
+
+        mock_resp = MagicMock()
+        mock_resp.content = b"%PDF-1.4 test binary"
+        mock_http_get.return_value = mock_resp
+
+        pdf_bytes, filename = sheets.exportar_reporte_pdf(area="Infraestructura")
+        self.assertEqual(pdf_bytes, b"%PDF-1.4 test binary")
+        self.assertIn("Infraestructura", filename)
+
+
+class TestTelegramClient(unittest.TestCase):
+    @patch("httpx.Client.post")
+    def test_send_document(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        telegram_client.send_document(123456, b"%PDF-1.4...", "Reporte.pdf", caption="Reporte listo")
+        mock_post.assert_called_once()
 
 
 class TestAIExtract(unittest.TestCase):
@@ -245,6 +301,14 @@ class TestFastAPIEndpoints(unittest.TestCase):
             self.assertIn("respuestas", data)
             self.assertIn("opciones", data)
             self.assertTrue(data.get("es_admin"))
+
+    @patch("app.sheets.exportar_reporte_pdf", return_value=(b"%PDF-1.4 test content", "Reporte_Infraestructura_Test.pdf"))
+    def test_descargar_reporte_pdf_endpoint(self, mock_export):
+        res = self.client.get("/api/descargar-reporte-pdf?area=Infraestructura")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.content, b"%PDF-1.4 test content")
+        self.assertEqual(res.headers["content-type"], "application/pdf")
+        mock_export.assert_called_once_with(area="Infraestructura")
 
 
 if __name__ == "__main__":
