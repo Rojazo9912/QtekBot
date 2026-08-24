@@ -736,7 +736,7 @@ def exportar_reporte_pdf(area: str = "Todos") -> tuple[bytes, str]:
     token = creds.token
     headers = {"Authorization": f"Bearer {token}"}
 
-    with httpx.Client(timeout=45) as client:
+    with httpx.Client(timeout=45, follow_redirects=True) as client:
         r = client.get(url, params=params, headers=headers)
         r.raise_for_status()
         pdf_bytes = r.content
@@ -868,7 +868,10 @@ def add_evidence(
             actual_col = ws.cell(row_idx, col, value_render_option=ValueRenderOption.formula).value
             if not actual_col:
                 ws.update_cell(row_idx, col, f'=IMAGE("{url_formula}", 4, {TAMANO_FOTO_PX}, {TAMANO_FOTO_PX})')
-                _ajustar_dimensiones_foto(ws, row_idx)
+                try:
+                    _ajustar_dimensiones_foto(ws, row_idx)
+                except Exception as e:
+                    print(f"[sheets] aviso: no se pudieron ajustar dimensiones de foto: {e}")
                 break
 
     return True
