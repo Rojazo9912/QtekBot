@@ -123,23 +123,56 @@ def parsear_hora(texto: str) -> str | None:
     return None
 
 
+_MESES = {
+    "enero": 1, "ene": 1,
+    "febrero": 2, "feb": 2,
+    "marzo": 3, "mar": 3,
+    "abril": 4, "abr": 4,
+    "mayo": 5, "may": 5,
+    "junio": 6, "jun": 6,
+    "julio": 7, "jul": 7,
+    "agosto": 8, "ago": 8,
+    "septiembre": 9, "sep": 9, "sept": 9,
+    "octubre": 10, "oct": 10,
+    "noviembre": 11, "nov": 11,
+    "diciembre": 12, "dic": 12,
+}
+
+
 def parsear_fecha(texto: str) -> str | None:
-    """Parsea una fecha ingresada por el usuario (ej. 'ayer', 'antier', '2026-08-25', '25/08/2026')
-    y regresa formato 'YYYY-MM-DD' o None si no se especifica una fecha previa."""
+    """Parsea una fecha ingresada por el usuario (ej. 'ayer', 'antier', 'hace 3 días',
+    '25 de agosto', '25/08', '2026-08-25') en cualquier parte del texto."""
     if not texto:
         return None
     t_norm = _remover_acentos(texto)
     now = _ahora().date()
 
-    if t_norm in ("ayer", "el dia de ayer"):
+    if re.search(r"\bayer\b", t_norm):
         return (now - dt.timedelta(days=1)).isoformat()
-    if t_norm in ("antier", "anteayer", "hace 2 dias"):
+
+    if re.search(r"\b(antier|anteayer)\b", t_norm):
         return (now - dt.timedelta(days=2)).isoformat()
 
-    m_hace_dias = re.search(r"hace\s+(\d+)\s*d(?:ia|ias)?", t_norm)
+    m_hace_dias = re.search(r"\bhace\s+(\d+)\s*d(?:ia|ias)?\b", t_norm)
     if m_hace_dias:
         dias = int(m_hace_dias.group(1))
         return (now - dt.timedelta(days=dias)).isoformat()
+
+    # Formato textual: '25 de agosto' o '25 de ago'
+    m_texto_mes = re.search(
+        r"\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)(?:\s+de\s+(\d{4}))?\b",
+        t_norm,
+    )
+    if m_texto_mes:
+        dia = int(m_texto_mes.group(1))
+        mes_str = m_texto_mes.group(2)
+        anio = int(m_texto_mes.group(3)) if m_texto_mes.group(3) else now.year
+        mes = _MESES.get(mes_str)
+        if mes:
+            try:
+                return dt.date(anio, mes, dia).isoformat()
+            except ValueError:
+                pass
 
     # Formato ISO: YYYY-MM-DD
     m_iso = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", texto)
@@ -150,11 +183,19 @@ def parsear_fecha(texto: str) -> str | None:
         except ValueError:
             pass
 
-    # Formato latino: DD/MM/YYYY o DD-MM-YYYY
-    m_latino = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", texto)
+    # Formato latino: DD/MM/YYYY o DD/MM (ej: 25/08/2026 o 25/08)
+    m_latino = re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b", texto)
     if m_latino:
         try:
-            val = dt.date(int(m_latino.group(3)), int(m_latino.group(2)), int(m_latino.group(1)))
+            dia = int(m_latino.group(1))
+            mes = int(m_latino.group(2))
+            if m_latino.group(3):
+                anio = int(m_latino.group(3))
+                if anio < 100:
+                    anio += 2000
+            else:
+                anio = now.year
+            val = dt.date(anio, mes, dia)
             return val.isoformat()
         except ValueError:
             pass
@@ -558,7 +599,7 @@ def _ejecutar_intencion(estado, intencion: str, decir, ticket: str | None = None
             decir(f"Ya tienes la actividad {estado.folio_activo} activa. Escribe 'pausar' o 'finalizar' antes de iniciar otra.")
             return
         estado.esperando = "problema_y_ubicacion"
-        decir("¿Qué problema o actividad vas a atender y en qué ubicación?\n(Ejemplo: 'Falla de red en Oficina Central' o '#1042 Mantenimiento a switch')")
+        decir("¿Qué problema o actividad vas a atender y en qué ubicación?\n(Ejemplo: 'Falla de red en Oficina Central'. Si es de fecha pasada, incluye 'ayer', 'antier' o la fecha ej. '25/08'):")
 
     elif intencion == "pausar":
         if not estado.folio_activo:
