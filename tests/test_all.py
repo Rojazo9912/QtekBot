@@ -17,6 +17,7 @@ from app.bot_logic import (
     _remover_acentos,
     parsear_hora,
     parsear_fecha,
+    extraer_horas_de_texto,
     calcular_hora_fin,
     procesar_mensaje_web,
 )
@@ -41,6 +42,11 @@ class TestOfflineTimeParsing(unittest.TestCase):
         self.assertEqual(parsear_fecha("antier"), (hoy - dt.timedelta(days=2)).isoformat())
         self.assertEqual(parsear_fecha("2026-08-25"), "2026-08-25")
         self.assertEqual(parsear_fecha("25/08/2026"), "2026-08-25")
+
+    def test_extraer_horas_de_texto(self):
+        ini, fin = extraer_horas_de_texto("cambio de AP el 18/08/2026 a las 9 de la mañana y se termino a las 10")
+        self.assertEqual(ini, "09:00:00")
+        self.assertEqual(fin, "10:00:00")
 
     def test_calcular_hora_fin(self):
         self.assertEqual(calcular_hora_fin("07:50:00", "3 horas"), "10:50:00")

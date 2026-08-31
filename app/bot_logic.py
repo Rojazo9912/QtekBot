@@ -75,16 +75,19 @@ def _remover_acentos(texto: str) -> str:
 
 
 def parsear_hora(texto: str) -> str | None:
-    """Parsea una hora ingresada por el usuario (ej. '7:50', '07:50 am', '14:30',
-    'hace 1 hora', 'ahora') y regresa formato 'HH:MM:SS' o None si no es válida."""
+    """Parsea una hora ingresada por el usuario (ej. '7:50', '07:50 am', '9 de la mañana',
+    '14:30', 'hace 1 hora', 'ahora') y regresa formato 'HH:MM:SS' o None si no es válida."""
+    if not texto:
+        return None
     t_norm = _remover_acentos(texto)
+    t_norm = t_norm.replace("de la manana", "am").replace("de la tarde", "pm").replace("de la noche", "pm").strip()
     now = _ahora()
 
     if t_norm in ("ahora", "ya", "actual", "tiempo real", "hoy", ""):
         return now.strftime("%H:%M:%S")
 
     # "hace X horas" o "hace X min"
-    m_hace = re.match(r"hace\s+(\d+)\s*(h|hr|hrs|hora|horas|m|min|mins|minuto|minutos)", t_norm)
+    m_hace = re.search(r"hace\s+(\d+)\s*(h|hr|hrs|hora|horas|m|min|mins|minuto|minutos)", t_norm)
     if m_hace:
         cant = int(m_hace.group(1))
         unidad = m_hace.group(2)
@@ -93,7 +96,7 @@ def parsear_hora(texto: str) -> str | None:
         return hora_calc.strftime("%H:%M:%S")
 
     # Formatos estándar: 7:50, 07:50, 7:50 am, 7:50 pm, 19:50, 07:50:00
-    m_hora = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$", t_norm)
+    m_hora = re.search(r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\b", t_norm)
     if m_hora:
         horas = int(m_hora.group(1))
         minutos = int(m_hora.group(2))
@@ -109,7 +112,7 @@ def parsear_hora(texto: str) -> str | None:
             return f"{horas:02d}:{minutos:02d}:{segundos:02d}"
 
     # Formato simple solo hora: '7 am', '8 pm', '14'
-    m_simple = re.match(r"^(\d{1,2})\s*(am|pm|a\.m\.|p\.m\.)?$", t_norm)
+    m_simple = re.search(r"\b(\d{1,2})\s*(am|pm|a\.m\.|p\.m\.)?\b", t_norm)
     if m_simple:
         horas = int(m_simple.group(1))
         ampm = m_simple.group(2)
@@ -121,6 +124,49 @@ def parsear_hora(texto: str) -> str | None:
             return f"{horas:02d}:00:00"
 
     return None
+
+
+def extraer_horas_de_texto(texto: str) -> tuple[str | None, str | None]:
+    """Extrae (hora_inicio, hora_fin) de una frase natural.
+    Ej: 'a las 9 de la mañana y se terminó a las 10' -> ('09:00:00', '10:00:00')
+    """
+    if not texto:
+        return None, None
+    t_norm = _remover_acentos(texto)
+
+    hora_ini = None
+    hora_fin = None
+
+    # Rango explícito: "de 9 a 10", "de 9 am a 10 am"
+    m_rango = re.search(
+        r"\bde\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|de la manana|de la tarde|de la noche)?)\s+a\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|de la manana|de la tarde|de la noche)?)\b",
+        t_norm,
+    )
+    if m_rango:
+        hora_ini = parsear_hora(m_rango.group(1))
+        hora_fin = parsear_hora(m_rango.group(2))
+        return hora_ini, hora_fin
+
+    # Hora de fin: "se termino a las 10", "termino a las 10"
+    m_fin = re.search(
+        r"\b(?:se\s+)?(?:termino|finalizo|concluyo|hasta)\s*(?:a\s*las|a)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|de la manana|de la tarde|de la noche)?)\b",
+        t_norm,
+    )
+    if m_fin:
+        hora_fin = parsear_hora(m_fin.group(1))
+        t_norm_ini = t_norm[:m_fin.start()] + t_norm[m_fin.end():]
+    else:
+        t_norm_ini = t_norm
+
+    # Hora de inicio: "a las 9 de la manana", "a las 9", "inicio a las 9"
+    m_ini = re.search(
+        r"\b(?:a\s*las|inicio\s*a\s*las|desde\s*las|a)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.|de la manana|de la tarde|de la noche)?)\b",
+        t_norm_ini,
+    )
+    if m_ini:
+        hora_ini = parsear_hora(m_ini.group(1))
+
+    return hora_ini, hora_fin
 
 
 _MESES = {
@@ -446,6 +492,12 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         if fecha_extraida:
             estado.borrador["fecha_inicio"] = fecha_extraida
 
+        h_ini, h_fin = extraer_horas_de_texto(texto_limpio)
+        if h_ini:
+            estado.borrador["hora_inicio"] = h_ini
+        if h_fin:
+            estado.borrador["hora_fin"] = h_fin
+
         m_ticket = re.search(r"(?:ticket|folio|#)\s*#?([A-Za-z0-9-]+)", texto_limpio, re.IGNORECASE)
         ticket_extraido = m_ticket.group(1) if m_ticket else None
 
@@ -477,8 +529,9 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         else:
             area_val = "Soporte"
 
-        hora_ini = _ahora().strftime("%H:%M:%S")
+        hora_ini = estado.borrador.get("hora_inicio") or _ahora().strftime("%H:%M:%S")
         fecha_ini = estado.borrador.get("fecha_inicio")
+        hora_fin_previa = estado.borrador.get("hora_fin")
         try:
             folio = sheets.start_activity(
                 tecnico=tecnico,
@@ -494,8 +547,12 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             estado.folio_activo = folio
             estado.esperando = None
             estado.borrador = {"hora_inicio": hora_ini, "fecha_inicio": fecha_ini}
+            if hora_fin_previa:
+                estado.borrador["hora_fin"] = hora_fin_previa
+
             msg_fecha = f" [Fecha: {fecha_ini}]" if fecha_ini else ""
-            decir(f"✅ Actividad iniciada{msg_fecha} (Hora Inicio: {hora_ini[:5]}). Folio: {folio}.\nEscribe 'finalizar' cuando concluyas el trabajo.")
+            msg_fin = f" (Hora Fin est.: {hora_fin_previa[:5]})" if hora_fin_previa else ""
+            decir(f"✅ Actividad iniciada{msg_fecha} (Hora Inicio: {hora_ini[:5]}){msg_fin}. Folio: {folio}.\nEscribe 'finalizar' cuando concluyas el trabajo.")
         except Exception as e:
             print(f"[bot_logic] error iniciando actividad en sheets: {e}")
             decir(f"Hubo un error registrando la actividad en Google Sheets: {e}")
@@ -511,7 +568,11 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         else:
             estado.borrador["solucion"] = texto_limpio
 
-        hora_fin_calc = _ahora().strftime("%H:%M:%S")
+        _, h_fin_nueva = extraer_horas_de_texto(texto_limpio)
+        if h_fin_nueva:
+            estado.borrador["hora_fin"] = h_fin_nueva
+
+        hora_fin_calc = estado.borrador.get("hora_fin") or _ahora().strftime("%H:%M:%S")
         try:
             sheets.finish_activity(
                 estado.folio_activo,
