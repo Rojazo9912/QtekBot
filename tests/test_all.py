@@ -16,6 +16,7 @@ from app.bot_logic import (
     _match_catalogo,
     _remover_acentos,
     parsear_hora,
+    parsear_fecha,
     calcular_hora_fin,
     procesar_mensaje_web,
 )
@@ -33,6 +34,13 @@ class TestOfflineTimeParsing(unittest.TestCase):
         self.assertEqual(parsear_hora("7:50 pm"), "19:50:00")
         self.assertEqual(parsear_hora("14:30"), "14:30:00")
         self.assertIsNotNone(parsear_hora("ahora"))
+
+    def test_parsear_fecha_formatos(self):
+        hoy = dt.datetime.now(sheets.ZONA_HORARIA).date()
+        self.assertEqual(parsear_fecha("ayer"), (hoy - dt.timedelta(days=1)).isoformat())
+        self.assertEqual(parsear_fecha("antier"), (hoy - dt.timedelta(days=2)).isoformat())
+        self.assertEqual(parsear_fecha("2026-08-25"), "2026-08-25")
+        self.assertEqual(parsear_fecha("25/08/2026"), "2026-08-25")
 
     def test_calcular_hora_fin(self):
         self.assertEqual(calcular_hora_fin("07:50:00", "3 horas"), "10:50:00")

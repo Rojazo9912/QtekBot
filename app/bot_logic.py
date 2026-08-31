@@ -123,6 +123,45 @@ def parsear_hora(texto: str) -> str | None:
     return None
 
 
+def parsear_fecha(texto: str) -> str | None:
+    """Parsea una fecha ingresada por el usuario (ej. 'ayer', 'antier', '2026-08-25', '25/08/2026')
+    y regresa formato 'YYYY-MM-DD' o None si no se especifica una fecha previa."""
+    if not texto:
+        return None
+    t_norm = _remover_acentos(texto)
+    now = _ahora().date()
+
+    if t_norm in ("ayer", "el dia de ayer"):
+        return (now - dt.timedelta(days=1)).isoformat()
+    if t_norm in ("antier", "anteayer", "hace 2 dias"):
+        return (now - dt.timedelta(days=2)).isoformat()
+
+    m_hace_dias = re.search(r"hace\s+(\d+)\s*d(?:ia|ias)?", t_norm)
+    if m_hace_dias:
+        dias = int(m_hace_dias.group(1))
+        return (now - dt.timedelta(days=dias)).isoformat()
+
+    # Formato ISO: YYYY-MM-DD
+    m_iso = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", texto)
+    if m_iso:
+        try:
+            val = dt.date(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
+            return val.isoformat()
+        except ValueError:
+            pass
+
+    # Formato latino: DD/MM/YYYY o DD-MM-YYYY
+    m_latino = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", texto)
+    if m_latino:
+        try:
+            val = dt.date(int(m_latino.group(3)), int(m_latino.group(2)), int(m_latino.group(1)))
+            return val.isoformat()
+        except ValueError:
+            pass
+
+    return None
+
+
 def calcular_hora_fin(hora_inicio_str: str | None, duracion_texto: str) -> str:
     """Calcula la hora de finalización sumando la duración a la hora de inicio.
     Si la duración es 'ahora' o no se puede parsear, regresa la hora actual."""
@@ -362,6 +401,10 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         return respuestas
 
     if estado.esperando == "problema_y_ubicacion":
+        fecha_extraida = parsear_fecha(texto_limpio)
+        if fecha_extraida:
+            estado.borrador["fecha_inicio"] = fecha_extraida
+
         m_ticket = re.search(r"(?:ticket|folio|#)\s*#?([A-Za-z0-9-]+)", texto_limpio, re.IGNORECASE)
         ticket_extraido = m_ticket.group(1) if m_ticket else None
 
@@ -394,6 +437,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             area_val = "Soporte"
 
         hora_ini = _ahora().strftime("%H:%M:%S")
+        fecha_ini = estado.borrador.get("fecha_inicio")
         try:
             folio = sheets.start_activity(
                 tecnico=tecnico,
@@ -404,11 +448,13 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
                 tipo_falla=valor,
                 prioridad=DEFAULT_PRIORIDAD,
                 hora_inicio=hora_ini,
+                fecha_inicio=fecha_ini,
             )
             estado.folio_activo = folio
             estado.esperando = None
-            estado.borrador = {"hora_inicio": hora_ini}
-            decir(f"✅ Actividad iniciada (Hora Inicio: {hora_ini[:5]}). Folio: {folio}.\nEscribe 'finalizar' cuando concluyas el trabajo.")
+            estado.borrador = {"hora_inicio": hora_ini, "fecha_inicio": fecha_ini}
+            msg_fecha = f" [Fecha: {fecha_ini}]" if fecha_ini else ""
+            decir(f"✅ Actividad iniciada{msg_fecha} (Hora Inicio: {hora_ini[:5]}). Folio: {folio}.\nEscribe 'finalizar' cuando concluyas el trabajo.")
         except Exception as e:
             print(f"[bot_logic] error iniciando actividad en sheets: {e}")
             decir(f"Hubo un error registrando la actividad en Google Sheets: {e}")

@@ -258,20 +258,21 @@ def _formula_duracion(row: int) -> str:
 
 
 def _formula_rank_periodo(row: int) -> str:
+    c_folio = _letra(COL_FOLIO)
     c_fecha = _letra(COL_FECHA_INICIO)
     c_area = _letra(COL_AREA)
+    rango_fecha = f"${c_fecha}$4:${c_fecha}{row}"
+    rango_folio = f"${c_folio}$4:${c_folio}{row}"
+    rango_area = f"${c_area}$4:${c_area}{row}"
     periodo_ini = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$C$13"
     periodo_fin = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$E$13"
     area_reporte = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$G$13"
-    rango_fecha = _rango_registro(c_fecha)
-    rango_folio = _rango_registro(_letra(COL_FOLIO))
-    rango_area = _rango_registro(c_area)
 
     cond_area_fila = f"OR({area_reporte}=\"Todos\",{area_reporte}=\"\",{c_area}{row}={area_reporte})"
     cond_area_rango = f"(({area_reporte}=\"Todos\")+({area_reporte}=\"\")+({rango_area}={area_reporte})>0)"
 
     return (
-        f'=IF({_rango_registro(_letra(COL_FOLIO))}="","", '
+        f'=IF({c_folio}{row}="","", '
         f'IF(AND({c_fecha}{row}<>"",{c_fecha}{row}>={periodo_ini},{c_fecha}{row}<={periodo_fin},{cond_area_fila}),'
         f'SUMPRODUCT(({rango_fecha}<>"")*({rango_fecha}>={periodo_ini})*({rango_fecha}<={periodo_fin})*({rango_folio}<>"")*{cond_area_rango}),'
         f'""))'
@@ -792,14 +793,15 @@ def obtener_hora_inicio(folio: str) -> Optional[str]:
 def start_activity(
     tecnico: str, ticket: Optional[str], area: str, ubicacion: str, problema: str,
     tipo_falla: str, prioridad: str, hora_inicio: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
 ) -> str:
     """Crea una fila nueva en 'Registro de Tickets'. Devuelve el folio (o el
-    ticket si existía). Permite especificar una hora_inicio personalizada (HH:MM:SS)
-    o usa la hora actual por defecto."""
+    ticket si existía). Permite especificar una hora_inicio (HH:MM:SS) y fecha_inicio (YYYY-MM-DD)
+    personalizada o usa la fecha/hora actual por defecto."""
     ws = _get_worksheet()
     folio = ticket if ticket else _next_folio()
     now = _ahora()
-    fecha = now.strftime("%Y-%m-%d")
+    fecha = fecha_inicio if fecha_inicio else now.strftime("%Y-%m-%d")
     hora_ini = hora_inicio if hora_inicio else now.strftime("%H:%M:%S")
     row = [
         "", area, folio, fecha, prioridad, ubicacion, tecnico, fecha,
