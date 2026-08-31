@@ -5,6 +5,13 @@ PDF" del Google Sheet. Edítalo aquí cuando cambien los técnicos, el contrato
 o el catálogo de fallas — no requiere tocar la lógica del bot.
 """
 
+import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Semilla inicial: solo se usa una vez, para crear la hoja "Técnicos" del
 # Google Sheet la primera vez que corre el bot. Después de eso, la lista de
 # técnicos vive en esa hoja (fuente de verdad en tiempo de ejecución) y se

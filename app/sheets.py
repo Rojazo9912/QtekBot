@@ -86,10 +86,16 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
-SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "")
-CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-CREDENTIALS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials.json")
-WORKSHEET_NAME = os.environ.get("GOOGLE_WORKSHEET_NAME", "Registro de Tickets")
+def _get_sheet_id() -> str:
+    return os.environ.get("GOOGLE_SHEET_ID", "").strip()
+
+def _get_credentials_json() -> Optional[str]:
+    return os.environ.get("GOOGLE_CREDENTIALS_JSON")
+
+def _get_worksheet_name() -> str:
+    val = os.environ.get("GOOGLE_WORKSHEET_NAME", "Registro de Tickets")
+    return val.strip() if val else "Registro de Tickets"
+
 INSTRUCCIONES_WORKSHEET_NAME = "Instrucciones"
 RESUMEN_KPI_WORKSHEET_NAME = "Resumen KPI"
 REPORTE_PDF_WORKSHEET_NAME = "Reporte PDF"
@@ -107,17 +113,19 @@ def _ahora() -> dt.datetime:
 
 
 def _load_credentials() -> Credentials:
-    if CREDENTIALS_JSON:
+    creds_json = _get_credentials_json()
+    creds_path = os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials.json")
+    if creds_json:
         try:
-            info = json.loads(CREDENTIALS_JSON)
+            info = json.loads(creds_json)
         except json.JSONDecodeError as e:
             raise RuntimeError(
                 "GOOGLE_CREDENTIALS_JSON no es un JSON válido. Asegúrate de haber "
                 "pegado el contenido completo del archivo, sin recortar ni escapar nada."
             ) from e
         return Credentials.from_service_account_info(info, scopes=SCOPES)
-    if os.path.exists(CREDENTIALS_PATH):
-        return Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+    if os.path.exists(creds_path):
+        return Credentials.from_service_account_file(creds_path, scopes=SCOPES)
     raise RuntimeError(
         "No hay credenciales de Google configuradas. Define GOOGLE_CREDENTIALS_JSON "
         "(recomendado en Railway) o GOOGLE_CREDENTIALS_PATH (solo desarrollo local)."
@@ -235,7 +243,7 @@ def _valor(fila: list, col: int) -> str:
 
 
 def _rango_registro(col_letra: str) -> str:
-    return f"'{WORKSHEET_NAME}'!${col_letra}$4:${col_letra}${RANGO_MAX_FILA}"
+    return f"'{_get_worksheet_name()}'!${col_letra}$4:${col_letra}${RANGO_MAX_FILA}"
 
 
 def _formula_no(row: int) -> str:
@@ -250,23 +258,20 @@ def _formula_duracion(row: int) -> str:
 
 
 def _formula_rank_periodo(row: int) -> str:
-    """SUMPRODUCT en vez de COUNTIFS (ver docstring del módulo): cuenta,
-    entre la fila 4 y esta fila, cuántos tickets tienen Fecha Inicio dentro
-    del periodo activo en 'Reporte PDF'!C13:E13 y que coincidan con el Área
-    en G13 (o todos si G13='Todos' o vacío)."""
-    c_folio = _letra(COL_FOLIO)
     c_fecha = _letra(COL_FECHA_INICIO)
     c_area = _letra(COL_AREA)
-    rango_fecha = f"${c_fecha}$4:${c_fecha}{row}"
-    rango_folio = f"${c_folio}$4:${c_folio}{row}"
-    rango_area = f"${c_area}$4:${c_area}{row}"
     periodo_ini = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$C$13"
     periodo_fin = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$E$13"
-    filtro_area = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$G$13"
-    cond_area_fila = f"OR({filtro_area}=\"Todos\",{filtro_area}=\"\",{c_area}{row}={filtro_area})"
-    cond_area_rango = f"(({filtro_area}=\"Todos\")+({filtro_area}=\"\")+({rango_area}={filtro_area})>0)"
+    area_reporte = f"'{REPORTE_PDF_WORKSHEET_NAME}'!$G$13"
+    rango_fecha = _rango_registro(c_fecha)
+    rango_folio = _rango_registro(_letra(COL_FOLIO))
+    rango_area = _rango_registro(c_area)
+
+    cond_area_fila = f"OR({area_reporte}=\"Todos\",{area_reporte}=\"\",{c_area}{row}={area_reporte})"
+    cond_area_rango = f"(({area_reporte}=\"Todos\")+({area_reporte}=\"\")+({rango_area}={area_reporte})>0)"
+
     return (
-        f'=IF({c_folio}{row}="","",'
+        f'=IF({_rango_registro(_letra(COL_FOLIO))}="","", '
         f'IF(AND({c_fecha}{row}<>"",{c_fecha}{row}>={periodo_ini},{c_fecha}{row}<={periodo_fin},{cond_area_fila}),'
         f'SUMPRODUCT(({rango_fecha}<>"")*({rango_fecha}>={periodo_ini})*({rango_fecha}<={periodo_fin})*({rango_folio}<>"")*{cond_area_rango}),'
         f'""))'
@@ -320,11 +325,12 @@ def _configurar_formato_registro(ws) -> None:
 
 
 def _ensure_registro_tickets(sh):
+    ws_name = _get_worksheet_name()
     try:
-        return sh.worksheet(WORKSHEET_NAME)
+        return sh.worksheet(ws_name)
     except gspread.WorksheetNotFound:
         pass
-    ws = sh.add_worksheet(title=WORKSHEET_NAME, rows=RANGO_MAX_FILA, cols=len(HEADERS_REGISTRO))
+    ws = sh.add_worksheet(title=ws_name, rows=RANGO_MAX_FILA, cols=len(HEADERS_REGISTRO))
     ws.update([[TITULO_REGISTRO]], "A1")
     ws.update([HEADERS_REGISTRO], "A2", value_input_option="USER_ENTERED")
     ws.update([FILA_EJEMPLO], "A3", value_input_option="USER_ENTERED")
@@ -600,13 +606,14 @@ def _get_worksheet():
     global _client, _worksheet, _tecnicos_ws
     if _worksheet is not None:
         return _worksheet
-    if not SHEET_ID:
+    sheet_id = _get_sheet_id()
+    if not sheet_id:
         raise RuntimeError(
             "No se ha configurado GOOGLE_SHEET_ID en las variables de entorno."
         )
     creds = _load_credentials()
     _client = gspread.authorize(creds)
-    sh = _client.open_by_key(SHEET_ID)
+    sh = _client.open_by_key(sheet_id)
     ws = _ensure_registro_tickets(sh)
     _tecnicos_ws = _ensure_tecnicos(sh)
     _ensure_instrucciones(sh)
@@ -732,7 +739,7 @@ def exportar_reporte_pdf(area: str = "Todos") -> tuple[bytes, str]:
         "sheetnames": "false",
         "fzr": "false",
     }
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export"
+    url = f"https://docs.google.com/spreadsheets/d/{_get_sheet_id()}/export"
     token = creds.token
     headers = {"Authorization": f"Bearer {token}"}
 

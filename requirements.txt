@@ -6,3 +6,5 @@ gspread==6.1.2
 google-auth==2.34.0
 google-api-python-client==2.147.0
 supabase==2.9.1
+python-dotenv==1.0.1
+

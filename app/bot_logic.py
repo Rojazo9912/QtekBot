@@ -411,7 +411,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             decir(f"✅ Actividad iniciada (Hora Inicio: {hora_ini[:5]}). Folio: {folio}.\nEscribe 'finalizar' cuando concluyas el trabajo.")
         except Exception as e:
             print(f"[bot_logic] error iniciando actividad en sheets: {e}")
-            decir("Hubo un error registrando la actividad en Google Sheets. Intenta de nuevo.")
+            decir(f"Hubo un error registrando la actividad en Google Sheets: {e}")
         return respuestas
 
     if estado.esperando == "solucion_y_evidencia":
@@ -440,7 +440,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             estado.borrador = {}
         except Exception as e:
             print(f"[bot_logic] error finalizando actividad en sheets: {e}")
-            decir("Hubo un error guardando el cierre de la actividad en Google Sheets. Intenta de nuevo.")
+            decir(f"Hubo un error guardando el cierre de la actividad en Google Sheets: {e}")
         return respuestas
 
     # Compatibilidad con cualquier estado previo
