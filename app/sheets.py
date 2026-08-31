@@ -809,7 +809,7 @@ def start_activity(
 
 
 def finish_activity(
-    folio: str, solucion: str, recomendaciones: str, receptor: str,
+    folio: str, solucion: str, recomendaciones: str = "", receptor: str = "",
     materiales: str = "", hora_fin: Optional[str] = None,
 ) -> bool:
     """Cierra la actividad en el Sheet. Permite especificar una hora_fin
@@ -820,17 +820,20 @@ def finish_activity(
     ws = _get_worksheet()
     hora_cierre = hora_fin if hora_fin else _ahora().strftime("%H:%M:%S")
 
-    recomendaciones_final = recomendaciones
-    if materiales:
+    rec_val = recomendaciones if recomendaciones else "Ninguna"
+    rec_final = rec_val
+    if materiales and materiales != "N/A":
         extra = f"Materiales/repuestos usados: {materiales}"
-        recomendaciones_final = f"{recomendaciones}\n{extra}".strip() if recomendaciones else extra
+        rec_final = f"{rec_val}\n{extra}".strip() if rec_val else extra
+
+    receptor_val = receptor if receptor else "Atendido en campo"
 
     ws.update_cell(row_idx, COL_HORA_FIN, hora_cierre)
     ws.update_cell(row_idx, COL_ESTATUS, ESTATUS_CERRADO)
     ws.update_cell(row_idx, COL_SOLUCION, solucion)
-    ws.update_cell(row_idx, COL_ENTREGADO_A, receptor)
-    if recomendaciones_final:
-        ws.update_cell(row_idx, COL_RECOMENDACIONES, recomendaciones_final)
+    ws.update_cell(row_idx, COL_ENTREGADO_A, receptor_val)
+    if rec_final:
+        ws.update_cell(row_idx, COL_RECOMENDACIONES, rec_final)
     return True
 
 

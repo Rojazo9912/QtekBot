@@ -52,6 +52,12 @@ CATALOGO_AREA = ["Infraestructura", "Soporte"]
 CATALOGO_PRIORIDAD = ["Alta", "Media", "Baja"]
 CATALOGO_ESTATUS = ["Abierto", "En Proceso", "Cerrado", "Cancelado"]
 
+# Valores por defecto para el flujo de llenado simplificado
+DEFAULT_PRIORIDAD = "Media"
+DEFAULT_RECEPTOR = "Atendido en campo"
+DEFAULT_RECOMENDACIONES = "Ninguna"
+DEFAULT_MATERIALES = "N/A"
+
 # Datos fijos del contrato, para la sección "1. Información General" de
 # "Reporte PDF". Edítalos si cambia el contrato, el director general o los
 # representantes.

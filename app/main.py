@@ -41,16 +41,10 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 # Pasos de la conversación en los que el bot ofrece un catálogo fijo de
 # opciones (en vez del teclado persistente de atajos).
 CATALOGOS_POR_ESTADO = {
-    "ticket_si_no": ["Sí", "No"],
-    "confirmacion": ["Sí", "No"],
-    "area": CATALOGO_AREA,
+    "problema_y_ubicacion": [],
     "tipo_falla": CATALOGO_TIPO_FALLA,
-    "prioridad": CATALOGO_PRIORIDAD,
-    "hora_inicio": ["Ahora", "7:00 am", "8:00 am", "Hace 1 hora", "Hace 2 horas"],
-    "duracion": ["30 min", "1 hora", "1h 30m", "2 horas", "3 horas", "Ahora"],
-    "evidencias": ["Listo", "Sin fotos"],
-    "recomendaciones": ["Ninguna"],
-    "materiales": ["No"],
+    "solucion_y_evidencia": ["Listo"],
+    "confirmacion": ["Sí", "No"],
     "admin_tipo_reporte": ["General (Todos)", "Infraestructura", "Soporte", "Generar los 3 PDFs"],
     "admin_periodo_reporte": ["Semana actual", "Semana pasada", "Personalizado"],
 }

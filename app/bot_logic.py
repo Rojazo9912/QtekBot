@@ -15,6 +15,10 @@ from app.config import (
     CATALOGO_AREA,
     CATALOGO_PRIORIDAD,
     CATALOGO_TIPO_FALLA,
+    DEFAULT_PRIORIDAD,
+    DEFAULT_RECEPTOR,
+    DEFAULT_RECOMENDACIONES,
+    DEFAULT_MATERIALES,
 )
 from app.state import get_estado
 
@@ -357,22 +361,23 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         decir("Formato incorrecto. Usa: AAAA-MM-DD AAAA-MM-DD\n(Ejemplo: '2026-08-01 2026-08-15') o escribe 'cancelar'.")
         return respuestas
 
-    if estado.esperando == "ticket_si_no":
-        _procesar_ticket_si_no(estado, texto_limpio, decir)
-        return respuestas
+    if estado.esperando == "problema_y_ubicacion":
+        m_ticket = re.search(r"(?:ticket|folio|#)\s*#?([A-Za-z0-9-]+)", texto_limpio, re.IGNORECASE)
+        ticket_extraido = m_ticket.group(1) if m_ticket else None
 
-    if estado.esperando == "numero_ticket":
-        estado.borrador["ticket"] = texto_limpio
-        estado.esperando = "area"
-        decir(_prompt_area())
-        return respuestas
+        partes = re.split(r"\s+en\s+|\s*:\s*", texto_limpio, maxsplit=1, flags=re.IGNORECASE)
+        if len(partes) == 2 and partes[0].strip() and partes[1].strip():
+            problema_val = partes[0].strip()
+            ubicacion_val = partes[1].strip()
+        else:
+            problema_val = texto_limpio
+            ubicacion_val = "Planta / Campo"
 
-    if estado.esperando == "area":
-        valor = _match_catalogo(texto_limpio, CATALOGO_AREA)
-        if not valor:
-            decir("No reconozco esa opción.\n" + _prompt_area())
-            return respuestas
-        estado.borrador["area"] = valor
+        estado.borrador["problema"] = problema_val
+        estado.borrador["ubicacion"] = ubicacion_val
+        if ticket_extraido:
+            estado.borrador["ticket"] = ticket_extraido
+
         estado.esperando = "tipo_falla"
         decir(_prompt_tipo_falla())
         return respuestas
@@ -382,120 +387,71 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         if not valor:
             decir("No reconozco esa opción.\n" + _prompt_tipo_falla())
             return respuestas
-        estado.borrador["tipo_falla"] = valor
-        estado.esperando = "prioridad"
-        decir(_prompt_prioridad())
-        return respuestas
 
-    if estado.esperando == "prioridad":
-        valor = _match_catalogo(texto_limpio, CATALOGO_PRIORIDAD)
-        if not valor:
-            decir("No reconozco esa opción.\n" + _prompt_prioridad())
-            return respuestas
-        estado.borrador["prioridad"] = valor
-        estado.esperando = "problema"
-        decir("Descríbeme brevemente el problema o la actividad.")
-        return respuestas
+        if valor in ("Falla de red", "Revision de Leaky Feeder", "Hardware / Equipo dañado"):
+            area_val = "Infraestructura"
+        else:
+            area_val = "Soporte"
 
-    if estado.esperando == "problema":
-        estado.borrador["problema"] = texto_limpio
-        estado.esperando = "ubicacion"
-        decir("¿En qué área o ubicación es?")
-        return respuestas
-
-    if estado.esperando == "ubicacion":
-        estado.borrador["ubicacion"] = texto_limpio
-        estado.esperando = "hora_inicio"
-        decir("¿A qué hora inició la actividad? Escribe la hora (ej. '7:50', '07:50 am') o 'ahora'.")
-        return respuestas
-
-    if estado.esperando == "hora_inicio":
-        hora_ini = parsear_hora(texto_limpio)
-        if not hora_ini:
-            decir("No reconocí el formato de hora. Escribe algo como '7:50', '07:50 am', '14:30' o escribe 'ahora'.")
-            return respuestas
-        estado.borrador["hora_inicio"] = hora_ini
+        hora_ini = _ahora().strftime("%H:%M:%S")
         try:
             folio = sheets.start_activity(
                 tecnico=tecnico,
                 ticket=estado.borrador.get("ticket"),
-                area=estado.borrador["area"],
-                ubicacion=estado.borrador["ubicacion"],
-                problema=estado.borrador["problema"],
-                tipo_falla=estado.borrador["tipo_falla"],
-                prioridad=estado.borrador["prioridad"],
+                area=area_val,
+                ubicacion=estado.borrador.get("ubicacion", "Planta / Campo"),
+                problema=estado.borrador.get("problema", ""),
+                tipo_falla=valor,
+                prioridad=DEFAULT_PRIORIDAD,
                 hora_inicio=hora_ini,
             )
             estado.folio_activo = folio
-            hora_inicio_guardada = estado.borrador.get("hora_inicio", hora_ini)
             estado.esperando = None
-            estado.borrador = {"hora_inicio": hora_inicio_guardada}
-            decir(f"Actividad iniciada (Hora Inicio: {hora_ini[:5]}). Folio: {folio}. Escribe 'pausar' o 'finalizar' cuando corresponda.")
+            estado.borrador = {"hora_inicio": hora_ini}
+            decir(f"✅ Actividad iniciada (Hora Inicio: {hora_ini[:5]}). Folio: {folio}.\nEscribe 'finalizar' cuando concluyas el trabajo.")
         except Exception as e:
             print(f"[bot_logic] error iniciando actividad en sheets: {e}")
             decir("Hubo un error registrando la actividad en Google Sheets. Intenta de nuevo.")
         return respuestas
 
-    if estado.esperando == "evidencias":
-        respuesta = _remover_acentos(texto_limpio)
-        if respuesta in ("listo", "no", "omitir", "ninguna", "ya", "listo.", "sin fotos"):
-            estado.esperando = "solucion"
-            decir("¿Cuál fue la solución aplicada?")
+    if estado.esperando == "solucion_y_evidencia":
+        respuesta_norm = _remover_acentos(texto_limpio)
+
+        if respuesta_norm in ("listo", "no", "omitir", "ninguna", "ya", "listo.", "sin fotos"):
+            if "solucion" not in estado.borrador:
+                decir("Por favor escribe brevemente cuál fue la solución aplicada para cerrar la actividad.")
+                return respuestas
         else:
-            decir("Manda tus fotos ahora (una o varias), o escribe 'listo' si ya terminaste / no tienes fotos.")
-        return respuestas
+            estado.borrador["solucion"] = texto_limpio
 
-    if estado.esperando == "solucion":
-        estado.borrador["solucion"] = texto_limpio
-        estado.esperando = "duracion"
-        decir("¿Cuánto tiempo duró la actividad? (ej. '3 horas', '45 min', '1h 30m' o escribe 'ahora' para la hora actual).")
-        return respuestas
-
-    if estado.esperando == "duracion":
-        hora_ini = estado.borrador.get("hora_inicio")
-        if not hora_ini and estado.folio_activo:
-            try:
-                hora_ini = sheets.obtener_hora_inicio(estado.folio_activo)
-            except Exception:
-                pass
-        hora_fin_calc = calcular_hora_fin(hora_ini, texto_limpio)
-        estado.borrador["hora_fin"] = hora_fin_calc
-        estado.esperando = "recomendaciones"
-        decir(f"Duración registrada (Hora Fin: {hora_fin_calc[:5]}). ¿Alguna recomendación para evitar que se repita? (o escribe 'ninguna')")
-        return respuestas
-
-    if estado.esperando == "recomendaciones":
-        valor = texto_limpio
-        estado.borrador["recomendaciones"] = "" if _remover_acentos(valor) in _SIN_DATO else valor
-        estado.esperando = "materiales"
-        decir("¿Usaste algún material o repuesto? Escríbelos separados por coma, o 'no'.")
-        return respuestas
-
-    if estado.esperando == "materiales":
-        valor = texto_limpio
-        estado.borrador["materiales"] = "" if _remover_acentos(valor) in _SIN_DATO else valor
-        estado.esperando = "receptor"
-        decir("¿Quién recibió el trabajo?")
-        return respuestas
-
-    if estado.esperando == "receptor":
-        estado.borrador["receptor"] = texto_limpio
+        hora_fin_calc = _ahora().strftime("%H:%M:%S")
         try:
             sheets.finish_activity(
                 estado.folio_activo,
-                solucion=estado.borrador["solucion"],
-                recomendaciones=estado.borrador.get("recomendaciones", ""),
-                receptor=estado.borrador["receptor"],
-                materiales=estado.borrador.get("materiales", ""),
-                hora_fin=estado.borrador.get("hora_fin"),
+                solucion=estado.borrador.get("solucion", "Trabajo concluido correctamente"),
+                recomendaciones=DEFAULT_RECOMENDACIONES,
+                receptor=DEFAULT_RECEPTOR,
+                materiales=DEFAULT_MATERIALES,
+                hora_fin=hora_fin_calc,
             )
-            decir(f"Actividad {estado.folio_activo} finalizada correctamente. Buen trabajo.")
+            decir(f"✅ Actividad {estado.folio_activo} finalizada correctamente. ¡Buen trabajo!")
             estado.folio_activo = None
             estado.esperando = None
             estado.borrador = {}
         except Exception as e:
             print(f"[bot_logic] error finalizando actividad en sheets: {e}")
             decir("Hubo un error guardando el cierre de la actividad en Google Sheets. Intenta de nuevo.")
+        return respuestas
+
+    # Compatibilidad con cualquier estado previo
+    if estado.esperando in ("ticket_si_no", "numero_ticket", "area", "prioridad", "problema", "ubicacion", "hora_inicio"):
+        estado.esperando = "problema_y_ubicacion"
+        decir("Hemos simplificado el reporte. ¿Qué problema vas a atender y en qué ubicación?\n(Ej. 'Switch en Oficina Central')")
+        return respuestas
+
+    if estado.esperando in ("evidencias", "solucion", "duracion", "recomendaciones", "materiales", "receptor"):
+        estado.esperando = "solucion_y_evidencia"
+        decir("¿Cuál fue la solución aplicada? (Manda tus fotos si tienes o escribe 'listo')")
         return respuestas
 
     if estado.esperando == "confirmacion":
@@ -553,10 +509,10 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 def _ejecutar_intencion(estado, intencion: str, decir, ticket: str | None = None, es_admin: bool = False):
     if intencion == "nueva_actividad":
         if estado.folio_activo:
-            decir(f"Ya tienes la actividad {estado.folio_activo} activa. Escribe 'pausar' antes de iniciar otra.")
+            decir(f"Ya tienes la actividad {estado.folio_activo} activa. Escribe 'pausar' o 'finalizar' antes de iniciar otra.")
             return
-        estado.esperando = "ticket_si_no"
-        decir("¿Esta actividad tiene ticket? (sí/no)")
+        estado.esperando = "problema_y_ubicacion"
+        decir("¿Qué problema o actividad vas a atender y en qué ubicación?\n(Ejemplo: 'Falla de red en Oficina Central' o '#1042 Mantenimiento a switch')")
 
     elif intencion == "pausar":
         if not estado.folio_activo:
@@ -595,8 +551,9 @@ def _ejecutar_intencion(estado, intencion: str, decir, ticket: str | None = None
         if not estado.folio_activo:
             decir("No tienes ninguna actividad activa para finalizar.")
             return
-        estado.esperando = "evidencias"
-        decir("Manda tus fotos de evidencia (una o varias). Cuando termines, escribe 'listo'. Si no tienes fotos, escribe 'no'.")
+        estado.esperando = "solucion_y_evidencia"
+        decir("¿Cuál fue la solución aplicada? (Puedes enviar fotos de evidencia o escribir 'listo' si ya las enviaste/no hay fotos).")
+
 
     elif intencion == "consultar":
         try:

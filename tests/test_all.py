@@ -89,57 +89,31 @@ class TestBotLogic(unittest.TestCase):
     def test_flujo_completo_con_duracion_offline(self, mock_finish, mock_start):
         estado = get_estado("TecnicoEstandar")
 
+        # 1. Iniciar actividad -> Pide problema y ubicación
         procesar_mensaje_web("TecnicoEstandar", "+ Nueva actividad")
-        self.assertEqual(estado.esperando, "ticket_si_no")
+        self.assertEqual(estado.esperando, "problema_y_ubicacion")
 
-        procesar_mensaje_web("TecnicoEstandar", "no")
-        self.assertEqual(estado.esperando, "area")
-
-        procesar_mensaje_web("TecnicoEstandar", "1")
+        # 2. Responder problema y ubicación -> Pide tipo de falla
+        procesar_mensaje_web("TecnicoEstandar", "Ruptura de cable de red en Rampa Elia 174")
         self.assertEqual(estado.esperando, "tipo_falla")
 
+        # 3. Elegir tipo de falla -> Inicia la actividad en Sheets automáticamente
         procesar_mensaje_web("TecnicoEstandar", "1")
-        self.assertEqual(estado.esperando, "prioridad")
-
-        procesar_mensaje_web("TecnicoEstandar", "1")
-        self.assertEqual(estado.esperando, "problema")
-
-        procesar_mensaje_web("TecnicoEstandar", "Ruptura de cable de red en mina")
-        self.assertEqual(estado.esperando, "ubicacion")
-
-        procesar_mensaje_web("TecnicoEstandar", "Rampa Elia 174")
-        self.assertEqual(estado.esperando, "hora_inicio")
-
-        procesar_mensaje_web("TecnicoEstandar", "7:50")
         self.assertIsNone(estado.esperando)
         self.assertEqual(estado.folio_activo, "FOLIO-0001")
         mock_start.assert_called_once()
-        self.assertEqual(mock_start.call_args.kwargs.get("hora_inicio"), "07:50:00")
+        self.assertEqual(mock_start.call_args.kwargs.get("tipo_falla"), "Falla de red")
+        self.assertEqual(mock_start.call_args.kwargs.get("area"), "Infraestructura")
 
+        # 4. Finalizar actividad -> Pide solución y evidencia
         procesar_mensaje_web("TecnicoEstandar", "finalizar")
-        self.assertEqual(estado.esperando, "evidencias")
+        self.assertEqual(estado.esperando, "solucion_y_evidencia")
 
-        procesar_mensaje_web("TecnicoEstandar", "sin fotos")
-        self.assertEqual(estado.esperando, "solucion")
-
+        # 5. Enviar solución -> Cierra la actividad en Sheets
         procesar_mensaje_web("TecnicoEstandar", "Se empalmó el cable y se cambió amplificador")
-        self.assertEqual(estado.esperando, "duracion")
-
-        procesar_mensaje_web("TecnicoEstandar", "3 horas")
-        self.assertEqual(estado.esperando, "recomendaciones")
-        self.assertEqual(estado.borrador.get("hora_fin"), "10:50:00")
-
-        procesar_mensaje_web("TecnicoEstandar", "ninguna")
-        self.assertEqual(estado.esperando, "materiales")
-
-        procesar_mensaje_web("TecnicoEstandar", "1 conector RJ45")
-        self.assertEqual(estado.esperando, "receptor")
-
-        procesar_mensaje_web("TecnicoEstandar", "Erick Andrade")
         self.assertIsNone(estado.esperando)
         self.assertIsNone(estado.folio_activo)
         mock_finish.assert_called_once()
-        self.assertEqual(mock_finish.call_args.kwargs.get("hora_fin"), "10:50:00")
 
     @patch("app.sheets.agregar_tecnico", return_value="XYZ789")
     def test_admin_flujo_nuevo_tecnico(self, mock_agregar):
