@@ -184,6 +184,31 @@ class TestFastAPIEndpoints(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json(), {"status": "healthy"})
 
+    @patch("app.main._tecnico_de", return_value="TecnicoEstandar")
+    @patch("app.telegram_client.send_text")
+    def test_telegram_webhook(self, mock_send, mock_tecnico):
+        res = self.client.post("/telegram-webhook", json={"message": {"chat": {"id": 12345}, "text": "Hola"}})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), {"status": "ok"})
+
+    @patch("app.main._tecnico_de", return_value="TecnicoEstandar")
+    @patch("app.telegram_client.descargar_archivo", return_value=(b"fakebytes", "evidencias/test.jpg"))
+    @patch("app.storage.upload_evidence", return_value="https://storage/test.jpg")
+    @patch("app.telegram_client.send_opciones")
+    @patch("app.telegram_client.send_text")
+    def test_telegram_webhook_foto(self, mock_send_text, mock_send_opciones, mock_upload, mock_download, mock_tecnico):
+        estado = get_estado("TecnicoEstandar")
+        estado.esperando = "evidencia"
+        estado.borrador = {"evidencias": []}
+
+        res = self.client.post(
+            "/telegram-webhook",
+            json={"message": {"chat": {"id": 12345}, "photo": [{"file_id": "file_123"}]}},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json(), {"status": "ok"})
+        mock_send_opciones.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,8 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import telegram_client as tg
-from app import sheets, storage
+from app import sheets, storage, bot_logic
 from app.bot_logic import procesar_mensaje_web
+from app.state import get_estado
 from app.config import ADMIN_TECNICOS, CATALOGO_UBICACION, CATALOGO_ESTADO_REPORTE
 app = FastAPI(title="FieldTI AI - Telegram Bot")
 
@@ -261,7 +262,7 @@ def _manejar_foto(message: dict):
 
         url = storage.upload_evidence(contenido, nombre_archivo, mime_type=mime_type)
         msg_resp = bot_logic.registrar_evidencia_foto(tecnico, url)
-        tg.send_text(chat_id, msg_resp, opciones=["Omitir", "Continuar"], es_admin=es_admin)
+        tg.send_opciones(chat_id, msg_resp, ["Omitir", "Continuar"])
     except Exception as e:
         print(f"[evidencia] error subiendo evidencia: {e}")
         tg.send_text(chat_id, f"No pude subir la evidencia. Error: {e}", es_admin=es_admin)
