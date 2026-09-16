@@ -951,3 +951,17 @@ def list_open_activities(tecnico: str) -> list[dict]:
             "Tipo de Falla": _valor(fila, COL_TIPO_FALLA),
         })
     return abiertas
+
+
+def limpiar_registros_tickets() -> int:
+    """Elimina todos los registros reales (de la fila 4 en adelante) de la hoja
+    'Registro de Tickets', reiniciando el contador de folios desde cero.
+    Devuelve el número de filas/registros eliminados."""
+    ws = _get_worksheet()
+    todas = ws.get_all_values()
+    cant_filas = len(todas)
+    if cant_filas >= 4:
+        ws.delete_rows(4, cant_filas)
+        return cant_filas - 3
+    return 0
+

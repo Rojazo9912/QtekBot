@@ -1,14 +1,21 @@
-# FieldTI AI — Piloto Telegram (Telegram → Google Sheets & Drive)
+# FieldTI — Reporte de Campo Ágil para Mina (QtekBot)
 
-Bot de Telegram que registra actividades de técnicos en tiempo real directamente en un Google Sheet y sube fotos de evidencia a Google Drive.
+Bot de Telegram para el registro de actividades en campo para minería en tiempo real, guardando los datos en Google Sheets y evidencias en Google Drive.
 
-## 🚀 Características y Funcionalidades
-- **Gestión de actividades**: Nueva actividad con ticket o folio interno automático (`FOLIO-0001`, `FOLIO-0002`...).
-- **Controles de estado**: Pausar, reanudar y finalizar actividades en curso.
-- **Consultas**: Ver actividades pendientes con el comando "Mis actividades".
-- **Interpretación NLU (OpenAI)**: Interpreta mensajes en lenguaje natural ("ya terminé", "voy a atender otra falla") e interactúa pidiendo confirmación ante ambigüedades.
-- **Evidencias en Google Drive**: Si el técnico envía fotos durante una actividad activa, la foto se sube automáticamente a Google Drive y se guarda el enlace en la columna "Evidencias" del Google Sheet.
-- **Teclado con botones de atajo**: Teclado persistente e interactivo en Telegram para agilizar el registro.
+> 📄 **Documentación oficial del PRD:** Consulta el archivo [`PRD.md`](file:///c:/Users/Migue/OneDrive/Documentos/Desarrollos/fieldti-pilot/QtekBot/PRD.md) para revisar las especificaciones de la **Versión 1.1** del piloto.
+
+## 🚀 Características y Flujo Principal (PRD v1.1)
+
+1. **Flujo de Registro en 5 Pasos**:
+   - 🎫 **Ticket**: Número de ticket u orden de trabajo (obligatorio, texto libre).
+   - 📍 **Ubicación**: Selección por botones (`Nivel 10`, `Nivel 11`, `Nivel 12`, `Otra`).
+   - 📝 **Actividad**: Descripción de la actividad realizada.
+   - 📊 **Estado**: Estado final (`✅ Terminado`, `⏸️ Pendiente`, `❌ No solucionado`).
+   - 📷 **Evidencia**: Carga opcional de una o varias fotos a Google Drive.
+2. **Confirmación Interactiva**: Resumen previo al guardado con opciones `✅ Guardar`, `✏️ Editar`, `❌ Cancelar`.
+3. **Gestión de Pendientes**: Consulta de reportes pendientes con opción de continuar anexando actualizaciones con marca de tiempo.
+4. **Almacenamiento Directo**: Google Sheets como base de datos del piloto y dashboard de consulta, con fotos en Google Drive.
+5. **Generación Automática**: Número de reporte consecutivo (`#001`, `#002`...), técnico (por sesión de Telegram), fecha y hora en zona horaria local (`America/Mexico_City`).
 
 ---
 

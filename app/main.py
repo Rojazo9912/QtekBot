@@ -135,6 +135,19 @@ def fijar_periodo_reporte(secret: str = "", desde: str = "", hasta: str = ""):
     return {"status": "ok", "periodo": f"{fecha_inicio.isoformat()} a {fecha_fin.isoformat()}"}
 
 
+@app.get("/api/limpiar-sheet")
+def limpiar_sheet_endpoint(secret: str = ""):
+    """Elimina todos los registros de prueba (fila 4 en adelante) en la hoja 'Registro de Tickets'."""
+    if REPORTE_ADMIN_SECRET and secret != REPORTE_ADMIN_SECRET:
+        return JSONResponse(status_code=403, content={"status": "forbidden"})
+    try:
+        borrados = sheets.limpiar_registros_tickets()
+        return {"status": "ok", "registros_eliminados": borrados, "mensaje": "Google Sheet reiniciado desde cero."}
+    except Exception as e:
+        print(f"[limpiar_sheet] error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detalle": str(e)})
+
+
 @app.get("/api/descargar-reporte-pdf")
 def descargar_reporte_pdf(area: str = "Todos"):
     """Descarga el archivo PDF del Reporte Contractual desde el navegador."""
