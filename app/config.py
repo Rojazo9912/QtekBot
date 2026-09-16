@@ -38,9 +38,11 @@ TECNICOS_INFO = {
 # auto-servicio desde el chat.
 ADMIN_TECNICOS = ["Miguel Abraham Lopez Ortiz"]
 
-# Catálogo fijo que el bot ofrece como botones al iniciar una actividad, para
-# que "Tipo de Falla" quede uniforme en el Registro de Tickets (en vez de
-# texto libre distinto cada vez).
+# Ubicaciones y Estados definidos en el PRD v1.1
+CATALOGO_UBICACION = ["Nivel 10", "Nivel 11", "Nivel 12", "Otra"]
+CATALOGO_ESTADO_REPORTE = ["Terminado", "Pendiente", "No solucionado"]
+
+# Catálogo fijo que el bot ofrece como botones al iniciar una actividad
 CATALOGO_TIPO_FALLA = [
     "Falla de red",
     "Revision de Leaky Feeder",
@@ -52,12 +54,10 @@ CATALOGO_TIPO_FALLA = [
     "Otro",
 ]
 
-# Catálogos del PRD "Estandarización del Reporte de Tickets TI" (columnas B,
-# E y R del "Registro de Tickets") — valores cerrados, el bot nunca escribe
-# texto libre del usuario en estas columnas.
+# Catálogos del PRD
 CATALOGO_AREA = ["Infraestructura", "Soporte"]
 CATALOGO_PRIORIDAD = ["Alta", "Media", "Baja"]
-CATALOGO_ESTATUS = ["Abierto", "En Proceso", "Cerrado", "Cancelado"]
+CATALOGO_ESTATUS = ["Terminado", "Pendiente", "No solucionado"]
 
 # Valores por defecto para el flujo de llenado simplificado
 DEFAULT_PRIORIDAD = "Media"

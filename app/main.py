@@ -16,37 +16,27 @@ from pydantic import BaseModel
 from app import telegram_client as tg
 from app import sheets, storage
 from app.bot_logic import procesar_mensaje_web
-from app.config import ADMIN_TECNICOS, CATALOGO_AREA, CATALOGO_PRIORIDAD, CATALOGO_TIPO_FALLA
-from app.state import get_estado
-
+from app.config import ADMIN_TECNICOS, CATALOGO_UBICACION, CATALOGO_ESTADO_REPORTE
 app = FastAPI(title="FieldTI AI - Telegram Bot")
 
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# chat_id de Telegram -> nombre de técnico. Caché en memoria (se pierde si el
-# bot se reinicia, ver aviso en app/state.py); la fuente de verdad durable es
-# el chat_id ya vinculado en la hoja "Técnicos" (ver _tecnico_de más abajo).
 SESIONES: dict[int, str] = {}
-
 WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
 REPORTE_ADMIN_SECRET = os.environ.get("REPORTE_ADMIN_SECRET")
-
-# URL pública de este servicio (la misma que usas para el webhook de
-# Telegram, ej. https://tu-app.up.railway.app). Sirve para armar el link de
-# /evidencia/ que usan las miniaturas =IMAGE() del Sheet — ver _manejar_foto.
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
-# Pasos de la conversación en los que el bot ofrece un catálogo fijo de
-# opciones (en vez del teclado persistente de atajos).
+# Pasos de la conversación en los que el bot ofrece un catálogo fijo de opciones
 CATALOGOS_POR_ESTADO = {
-    "problema_y_ubicacion": [],
-    "tipo_falla": CATALOGO_TIPO_FALLA,
-    "solucion_y_evidencia": ["Listo"],
-    "confirmacion": ["Sí", "No"],
-    "admin_tipo_reporte": ["General (Todos)", "Infraestructura", "Soporte", "Generar los 3 PDFs"],
-    "admin_periodo_reporte": ["Semana actual", "Semana pasada", "Personalizado"],
+    "ticket": [],
+    "ubicacion": CATALOGO_UBICACION,
+    "actividad": [],
+    "estado": CATALOGO_ESTADO_REPORTE,
+    "evidencia": ["Omitir"],
+    "confirmacion": ["✅ Guardar", "✏️ Editar", "❌ Cancelar"],
+    "continuar_pendiente_estado": CATALOGO_ESTADO_REPORTE,
 }
 
 
@@ -240,9 +230,7 @@ async def telegram_webhook(request: Request):
 
 
 def _manejar_foto(message: dict):
-    """Descarga la foto/documento de Telegram y la sube a Supabase Storage.
-    Guarda la URL pública permanente en la columna Evidencias del Sheet.
-    """
+    """Descarga la foto de Telegram, la sube a Google Drive / Storage y la anexa al borrador de evidencias."""
     chat_id = message["chat"]["id"]
     tecnico = _tecnico_de(chat_id)
     es_admin = tecnico in ADMIN_TECNICOS if tecnico else False
@@ -251,11 +239,11 @@ def _manejar_foto(message: dict):
         return
 
     estado = get_estado(tecnico)
-    if not estado.folio_activo:
-        tg.send_text(chat_id, "No tienes ninguna actividad activa a la cual adjuntar esta evidencia. Inicia o reanuda una actividad primero.", es_admin=es_admin)
+    if estado.esperando != "evidencia":
+        tg.send_text(chat_id, "Para registrar un nuevo reporte pulsa '➕ Nuevo reporte'.", es_admin=es_admin)
         return
 
-    tg.send_text(chat_id, "Subiendo evidencia…", con_teclado=False)
+    tg.send_text(chat_id, "Subiendo foto de evidencia…", con_teclado=False)
     try:
         if "photo" in message:
             file_id = message["photo"][-1]["file_id"]
@@ -269,17 +257,11 @@ def _manejar_foto(message: dict):
             return
 
         contenido, file_path = tg.descargar_archivo(file_id)
-        nombre_archivo = f"{estado.folio_activo}_{file_path.split('/')[-1]}"
+        nombre_archivo = f"evidencia_{tecnico.replace(' ', '_')}_{file_path.split('/')[-1]}"
 
         url = storage.upload_evidence(contenido, nombre_archivo, mime_type=mime_type)
-        ruta = storage.ruta_normalizada(nombre_archivo)
-        url_miniatura = f"{PUBLIC_BASE_URL}/evidencia/{ruta}" if PUBLIC_BASE_URL else None
-        guardado = sheets.add_evidence(estado.folio_activo, url, mime_type=mime_type, link_miniatura=url_miniatura)
-
-        if guardado:
-            tg.send_text(chat_id, f"Evidencia guardada en la actividad {estado.folio_activo}. ✅", es_admin=es_admin)
-        else:
-            tg.send_text(chat_id, f"La evidencia se subió, pero no encontré la fila del folio {estado.folio_activo} en el Sheet. Link: {url}", es_admin=es_admin)
+        msg_resp = bot_logic.registrar_evidencia_foto(tecnico, url)
+        tg.send_text(chat_id, msg_resp, opciones=["Omitir", "Continuar"], es_admin=es_admin)
     except Exception as e:
         print(f"[evidencia] error subiendo evidencia: {e}")
         tg.send_text(chat_id, f"No pude subir la evidencia. Error: {e}", es_admin=es_admin)
