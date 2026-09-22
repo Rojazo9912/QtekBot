@@ -5,38 +5,39 @@ Implementa el flujo de conversación de 5 pasos definido en el PRD v1.1:
 2) Ubicación
 3) Actividad
 4) Estado
-5) Evidencia (fotos opcionales a Google Drive)
+5) Evidencia (fotos opcionales a Supabase Storage)
 Confirmación: ✅ Guardar / ✏️ Editar / ❌ Cancelar
 Navegación: ➕ Nuevo reporte · ⏸️ Mis pendientes · 📋 Mis reportes
 """
 import datetime as dt
-import re
 import unicodedata
-from zoneinfo import ZoneInfo
-from typing import Optional
 
-from app import sheets
+from app import db
 from app.config import (
     ADMIN_TECNICOS,
     CATALOGO_UBICACION,
     CATALOGO_ESTADO_REPORTE,
+    ZONA_HORARIA,
 )
 from app.state import get_estado
 
-_SIN_DATO = ("no", "ninguna", "ninguno", "n/a", "na", "-", "omitir", "sin fotos")
 _CANCELAR_COMANDOS = ("cancelar", "cancel", "abortar", "/cancel", "salir")
 
 
 def _ahora() -> dt.datetime:
-    return dt.datetime.now(sheets.ZONA_HORARIA)
+    return dt.datetime.now(ZONA_HORARIA)
 
 
 def _remover_acentos(texto: str) -> str:
-    """Elimina acentos y pasa a minúsculas para comparaciones flexibles."""
+    """Elimina acentos y emoji y pasa a minúsculas para comparaciones flexibles.
+    Quitar los emoji (categoría "So") hace que "✏️ Editar", "✏ Editar" y
+    "Editar" coincidan igual: al quitar acentos también se va el selector de
+    variación U+FE0F, así que comparar contra literales con emoji no sirve."""
     if not texto:
         return ""
     nfd = unicodedata.normalize("NFD", texto)
-    return "".join(c for c in nfd if unicodedata.category(c) != "Mn").lower().strip()
+    limpio = "".join(c for c in nfd if unicodedata.category(c) not in ("Mn", "So"))
+    return " ".join(limpio.lower().split())
 
 
 def _normalizar_estado(texto: str) -> str:
@@ -77,7 +78,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
     if estado.esperando == "admin_nombre_tecnico":
         nombre_nuevo = texto_limpio
         try:
-            codigo = sheets.agregar_tecnico(nombre_nuevo)
+            codigo = db.agregar_tecnico(nombre_nuevo)
             estado.esperando = None
             if not codigo:
                 decir(f"El técnico {nombre_nuevo} ya estaba registrado en la lista de técnicos.")
@@ -88,46 +89,49 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
                     f"`/start {codigo}`"
                 )
         except Exception as e:
-            decir(f"Error al registrar técnico: {e}")
+            print(f"[admin] error registrando técnico: {e}")
+            decir("❌ No pude registrar al técnico por un error con la base de datos. Intenta más tarde.")
             estado.esperando = None
         return respuestas
 
     # --- NAVEGACIÓN DEL MENÚ PRINCIPAL ---
-    if t_norm in ("nuevo reporte", "+ nuevo reporte", "➕ nuevo reporte", "/nuevo_reporte", "nueva actividad", "+ nueva actividad", "/start"):
+    if t_norm in ("nuevo reporte", "+ nuevo reporte", "/nuevo_reporte", "nueva actividad", "+ nueva actividad", "/start"):
         # Reiniciar borrador y comenzar Paso 1 (Ticket)
         estado.borrador = {"evidencias": []}
         estado.esperando = "ticket"
         decir("🎫 *Paso 1 de 5 — Ticket*\n\nIngresa el número de ticket u orden de trabajo (obligatorio, ej. TK-001254):")
         return respuestas
 
-    if t_norm in ("mis pendientes", "⏸️ mis pendientes", "mis actividades", "/pendientes"):
-        pendientes = sheets.listar_reportes_pendientes(tecnico)
+    if t_norm in ("mis pendientes", "mis actividades", "/pendientes"):
+        pendientes = db.listar_reportes_pendientes(tecnico)
         if not pendientes:
             decir("⏸️ No tienes reportes en estado Pendiente.")
             return respuestas
 
         lineas = ["⏸️ *Tus reportes pendientes:*"]
         for p in pendientes:
-            lineas.append(f"• *{p['Numero']}* (Ticket: {p['Ticket']}) — {p['Ubicacion']}: {p['Actividad']}")
+            lineas.append(f"• *{p['numero']}* (Ticket: {p['ticket']}) — {p['ubicacion']}: {p['actividad']}")
         lineas.append("\nResponde con el número de reporte (ej. `#001` o `001`) que deseas continuar o actualizar:")
         estado.esperando = "seleccion_pendiente"
+        estado.borrador = {"pendientes": [p["numero"] for p in pendientes]}
         decir("\n".join(lineas))
         return respuestas
 
-    if t_norm in ("mis reportes", "📋 mis reportes", "historial", "/reportes"):
-        reportes = sheets.listar_mis_reportes(tecnico)
+    if t_norm in ("mis reportes", "historial", "/reportes"):
+        reportes = db.listar_mis_reportes(tecnico, limite=10)
         if not reportes:
             decir("📋 No tienes reportes registrados aún.")
             return respuestas
 
+        iconos = {"Terminado": "✅", "Pendiente": "⏸️", "No solucionado": "❌"}
         lineas = ["📋 *Tus últimos reportes:*"]
-        for r in reportes[-10:]:  # Mostrar los últimos 10
-            icono = "✅" if "terminado" in _remover_acentos(r["Estado"]) else ("⏸️" if "pendiente" in _remover_acentos(r["Estado"]) else "❌")
-            lineas.append(f"{icono} *{r['Numero']}* | Ticket: {r['Ticket']} | {r['Ubicacion']} ({r['Fecha']})")
+        for r in reportes:
+            icono = iconos.get(r["estado"], "•")
+            lineas.append(f"{icono} *{r['numero']}* | Ticket: {r['ticket']} | {r['ubicacion']} ({r['fecha']})")
         decir("\n".join(lineas))
         return respuestas
 
-    if t_norm in ("nuevo tecnico", "+ nuevo tecnico", "👤 + nuevo técnico", "/nuevo_tecnico", "dar de alta"):
+    if t_norm in ("nuevo tecnico", "+ nuevo tecnico", "/nuevo_tecnico", "dar de alta"):
         if not es_admin:
             decir("No tienes permisos de administrador para agregar técnicos.")
             return respuestas
@@ -146,6 +150,8 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         if es_admin:
             lineas.append("\n👑 *Administrador:*")
             lineas.append("• *👤 + Nuevo técnico*: Genera código de activación para un técnico nuevo.")
+            lineas.append("• *📊 Exportar Excel*: Reporte de la semana actual.")
+            lineas.append("• `/reporte AAAA-MM-DD AAAA-MM-DD`: Reporte en Excel de otro periodo.")
         decir("\n".join(lineas))
         return respuestas
 
@@ -169,7 +175,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         # Buscar coincidencia en catálogo
         ubicacion_sel = None
         for u in CATALOGO_UBICACION:
-            if _remover_acentos(u) == t_norm or t_norm in _remover_acentos(u):
+            if t_norm and (_remover_acentos(u) == t_norm or t_norm in _remover_acentos(u)):
                 ubicacion_sel = u
                 break
         if not ubicacion_sel:
@@ -197,6 +203,9 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
     # Paso 4: Estado
     if estado.esperando == "estado":
         estado_norm = _normalizar_estado(texto_limpio)
+        if estado_norm not in CATALOGO_ESTADO_REPORTE:
+            decir(f"Elige uno de estos estados: {', '.join(CATALOGO_ESTADO_REPORTE)}.")
+            return respuestas
         estado.borrador["estado"] = estado_norm
         estado.esperando = "evidencia"
         decir(
@@ -217,18 +226,16 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
     # Paso 6: Confirmación previa a guardado
     if estado.esperando == "confirmacion":
-        if t_norm in ("guardar", "✅ guardar", "si", "sí", "confirmar", "ok"):
-            # Guardar reporte en Google Sheets
+        if t_norm in ("guardar", "si", "confirmar", "ok"):
             try:
                 b = estado.borrador
-                evidencias_str = "\n".join(b.get("evidencias", []))
-                numero_creado = sheets.crear_reporte(
+                numero_creado = db.crear_reporte(
                     ticket=b.get("ticket", "N/A"),
                     tecnico=tecnico,
                     ubicacion=b.get("ubicacion", "Nivel 10"),
                     actividad=b.get("actividad", ""),
                     estado=b.get("estado", "Terminado"),
-                    evidencias=evidencias_str,
+                    evidencias=b.get("evidencias", []),
                 )
                 now = _ahora()
                 decir(
@@ -245,16 +252,17 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
                 estado.borrador = {}
                 estado.esperando = None
             except Exception as e:
-                decir(f"❌ Error al guardar en Google Sheets: {e}")
+                print(f"[reporte] error guardando en la base de datos: {e}")
+                decir("❌ No pude guardar el reporte. Tu borrador sigue aquí: responde *Guardar* para reintentar.")
             return respuestas
 
-        elif t_norm in ("editar", "✏️ editar", "corregir", "reiniciar"):
+        elif t_norm in ("editar", "corregir", "reiniciar"):
             estado.borrador = {"evidencias": []}
             estado.esperando = "ticket"
             decir("✏️ Reiniciando el reporte.\n\n🎫 *Paso 1 de 5 — Ticket*\n\nIngresa el número de ticket (obligatorio):")
             return respuestas
 
-        elif t_norm in ("cancelar", "❌ cancelar", "no"):
+        elif t_norm in ("cancelar", "no"):
             estado.borrador = {}
             estado.esperando = None
             decir("❌ Reporte cancelado.")
@@ -265,12 +273,16 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
     # Flujo de Continuar / Actualizar Pendiente
     if estado.esperando == "seleccion_pendiente":
-        num_clean = texto_limpio.replace("#", "").strip()
-        if not num_clean.isdigit():
+        id_reporte = db.parsear_numero(texto_limpio)
+        if id_reporte is None:
             decir("Por favor ingresa el número de reporte (ej. `#001` o `001`).")
             return respuestas
-        num_formateado = f"#{int(num_clean):03d}"
+        num_formateado = db.formatear_numero(id_reporte)
+        if num_formateado not in estado.borrador.get("pendientes", []):
+            decir(f"El reporte {num_formateado} no está en tu lista de pendientes. Escribe uno de la lista o *Cancelar*.")
+            return respuestas
         estado.folio_activo = num_formateado
+        estado.borrador = {}
         estado.esperando = "continuar_pendiente_actividad"
         decir(f"📝 *Actualizando reporte {num_formateado}*\n\nDescribe el avance o actualización realizada:")
         return respuestas
@@ -284,16 +296,22 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
     if estado.esperando == "continuar_pendiente_estado":
         nuevo_est = _normalizar_estado(texto_limpio)
+        if nuevo_est not in CATALOGO_ESTADO_REPORTE:
+            decir(f"Elige uno de estos estados: {', '.join(CATALOGO_ESTADO_REPORTE)}.")
+            return respuestas
         num_target = estado.folio_activo
         nueva_act = estado.borrador.get("nueva_actividad", "")
         try:
-            exito = sheets.actualizar_reporte_pendiente(num_target, nueva_actividad=nueva_act, nuevo_estado=nuevo_est)
+            exito = db.actualizar_reporte_pendiente(
+                num_target, tecnico=tecnico, nueva_actividad=nueva_act, nuevo_estado=nuevo_est,
+            )
             if exito:
                 decir(f"✅ Reporte *{num_target}* actualizado a estado *{nuevo_est}*.")
             else:
-                decir(f"❌ No se encontró el reporte {num_target} en Google Sheets.")
+                decir(f"❌ El reporte {num_target} ya no está pendiente o no es tuyo.")
         except Exception as e:
-            decir(f"Error al actualizar reporte: {e}")
+            print(f"[pendiente] error actualizando reporte: {e}")
+            decir("❌ No pude actualizar el reporte. Intenta más tarde.")
         estado.esperando = None
         estado.folio_activo = None
         estado.borrador = {}

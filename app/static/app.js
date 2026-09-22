@@ -12,17 +12,15 @@ let tecnicoActual = localStorage.getItem("fieldti_tecnico") || null;
 let esAdminActual = localStorage.getItem("fieldti_es_admin") === "true";
 
 const CHIPS_TECNICO = [
-  { texto: "+ Nueva actividad", valor: "nueva actividad" },
-  { texto: "⏸ Pausar", valor: "pausar" },
-  { texto: "▶ Reanudar", valor: "reanudar" },
-  { texto: "✓ Finalizar", valor: "finalizar" },
-  { texto: "☰ Mis actividades", valor: "mis actividades" },
+  { texto: "➕ Nuevo reporte", valor: "nuevo reporte" },
+  { texto: "⏸️ Mis pendientes", valor: "mis pendientes" },
+  { texto: "📋 Mis reportes", valor: "mis reportes" },
+  { texto: "❓ Ayuda", valor: "ayuda" },
 ];
 
 const CHIPS_ADMIN = [
   ...CHIPS_TECNICO,
   { texto: "👤 + Nuevo técnico", valor: "nuevo tecnico" },
-  { texto: "📄 Reporte PDF", valor: "reporte pdf" },
 ];
 
 function renderizarChips(opciones = []) {
@@ -90,11 +88,12 @@ function entrarComo(nombre) {
   agregarBurbuja(`Hola, ${nombre.split(" ")[0]}. Usa los botones de abajo o escribe libremente.`, "bot");
   inputTexto.focus();
 
-  // Consultar rol de admin con un ping silencioso
+  // Consultar rol de admin con un ping silencioso ("ayuda" no cambia el
+  // estado de la conversación ni consulta la base de datos)
   fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tecnico: nombre, texto: "mis actividades" }),
+    body: JSON.stringify({ tecnico: nombre, texto: "ayuda" }),
   }).then(r => r.json()).then(data => {
     if (data && typeof data.es_admin === "boolean") {
       esAdminActual = data.es_admin;

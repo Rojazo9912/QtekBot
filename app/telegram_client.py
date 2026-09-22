@@ -10,53 +10,41 @@ import httpx
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 API_URL = f"https://api.telegram.org/bot{TOKEN}" if TOKEN else ""
 
+# Menú principal (PRD v1.1). bot_logic ignora los emoji al comparar, así que
+# el texto de cada botón llega tal cual y se reconoce sin alias.
+_FILAS_MENU = [
+    [{"text": "➕ Nuevo reporte"}],
+    [{"text": "⏸️ Mis pendientes"}, {"text": "📋 Mis reportes"}],
+    [{"text": "❓ Ayuda"}],
+]
+
 # Teclado persistente para técnicos estándar
 TECLADO_ACCIONES = {
-    "keyboard": [
-        [{"text": "+ Nueva actividad"}, {"text": "⏸ Pausar"}],
-        [{"text": "▶ Reanudar"}, {"text": "✓ Finalizar"}],
-        [{"text": "☰ Mis actividades"}],
-    ],
+    "keyboard": _FILAS_MENU,
     "resize_keyboard": True,
     "is_persistent": True,
 }
 
 # Teclado persistente exclusivo para administradores
 TECLADO_ADMIN = {
-    "keyboard": [
-        [{"text": "+ Nueva actividad"}, {"text": "⏸ Pausar"}],
-        [{"text": "▶ Reanudar"}, {"text": "✓ Finalizar"}],
-        [{"text": "☰ Mis actividades"}],
-        [{"text": "👤 + Nuevo técnico"}, {"text": "📄 Reporte PDF"}],
-    ],
+    "keyboard": _FILAS_MENU + [[{"text": "👤 + Nuevo técnico"}, {"text": "📊 Exportar Excel"}]],
     "resize_keyboard": True,
     "is_persistent": True,
 }
 
-# Mapeo de botones y frases comunes a comandos limpios para bot_logic
+# Frases comunes y botones del teclado anterior (v1.0, que puede seguir
+# visible en el teléfono del técnico hasta que el bot le mande el nuevo) →
+# comandos que entiende bot_logic
 ALIAS_BOTONES = {
-    "+ nueva actividad": "nueva actividad",
-    "⏸ pausar": "pausar",
-    "▶ reanudar": "reanudar",
-    "✓ finalizar": "finalizar",
-    "☰ mis actividades": "mis actividades",
-    "👤 + nuevo técnico": "nuevo tecnico",
-    "👤 + nuevo tecnico": "nuevo tecnico",
-    "+ nuevo técnico": "nuevo tecnico",
-    "+ nuevo tecnico": "nuevo tecnico",
-    "nuevo técnico": "nuevo tecnico",
-    "nuevo tecnico": "nuevo tecnico",
+    "+ nueva actividad": "nuevo reporte",
+    "⏸ pausar": "mis pendientes",
+    "▶ reanudar": "mis pendientes",
+    "✓ finalizar": "mis pendientes",
+    "☰ mis actividades": "mis pendientes",
     "dar de alta a un usuario": "nuevo tecnico",
     "dar de alta usuario": "nuevo tecnico",
-    "dar de alta": "nuevo tecnico",
     "agregar técnico": "nuevo tecnico",
     "agregar tecnico": "nuevo tecnico",
-    "📄 reporte pdf": "reporte pdf",
-    "reporte pdf": "reporte pdf",
-    "generar reporte": "reporte pdf",
-    "reporte": "reporte pdf",
-    "comandos": "ayuda",
-    "ayuda": "ayuda",
 }
 
 
@@ -102,12 +90,15 @@ def send_opciones(chat_id: int, texto: str, opciones: list[str]) -> None:
         print(f"[telegram] error enviando opciones: {e}")
 
 
-def send_document(chat_id: int, file_bytes: bytes, filename: str, caption: str = "") -> None:
-    """Envía un archivo adjunto (ej. documento PDF) al chat de Telegram."""
+def send_document(
+    chat_id: int, file_bytes: bytes, filename: str, caption: str = "",
+    mime_type: str = "application/octet-stream",
+) -> None:
+    """Envía un archivo adjunto (ej. el Excel del reporte) al chat de Telegram."""
     if not TOKEN:
         print("[telegram] AVISO: TELEGRAM_BOT_TOKEN no está configurado.")
         return
-    files = {"document": (filename, file_bytes, "application/pdf")}
+    files = {"document": (filename, file_bytes, mime_type)}
     data = {"chat_id": str(chat_id)}
     if caption:
         data["caption"] = caption

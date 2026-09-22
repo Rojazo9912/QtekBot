@@ -1,12 +1,14 @@
 """
-Piloto FieldTI AI — Bot de Telegram + Web App para registro de actividades en Google Sheets.
+Piloto FieldTI AI — Bot de Telegram + Web App para registro de actividades.
+Los datos viven en Supabase Postgres (app/db.py) y el admin descarga el
+reporte en Excel (app/excel.py).
 
 Punto de entrada principal para Railway y desarrollo local.
 Comando de inicio: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 """
 import datetime as dt
+import hmac
 import os
-import re
 from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -14,10 +16,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import telegram_client as tg
-from app import sheets, storage, bot_logic
+from app import db, excel, storage, bot_logic
 from app.bot_logic import procesar_mensaje_web
 from app.state import get_estado
-from app.config import ADMIN_TECNICOS, CATALOGO_UBICACION, CATALOGO_ESTADO_REPORTE
+from app.config import ADMIN_TECNICOS, CATALOGO_UBICACION, CATALOGO_ESTADO_REPORTE, ZONA_HORARIA
 app = FastAPI(title="FieldTI AI - Telegram Bot")
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -27,7 +29,53 @@ if STATIC_DIR.exists():
 SESIONES: dict[int, str] = {}
 WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
 REPORTE_ADMIN_SECRET = os.environ.get("REPORTE_ADMIN_SECRET")
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+# La web app de pruebas (/ y /api/chat) no tiene login: cualquiera que conozca
+# la URL podría escribir como cualquier técnico, incluido el admin. Por eso
+# está apagada salvo que se active explícitamente (solo en local / pruebas).
+WEBAPP_HABILITADA = os.environ.get("WEBAPP_HABILITADA", "").strip().lower() in ("1", "true", "si", "yes")
+
+MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+if not WEBHOOK_SECRET:
+    print("[telegram] AVISO: TELEGRAM_WEBHOOK_SECRET no está configurado; "
+          "cualquiera podría mandar updates falsos al webhook.")
+
+
+def _secreto_valido(recibido: str | None, esperado: str | None) -> bool:
+    """Compara en tiempo constante. Sin secreto configurado, rechaza (falla
+    en cerrado)."""
+    if not esperado or not recibido:
+        return False
+    return hmac.compare_digest(recibido.encode(), esperado.encode())
+
+
+def _admin_autorizado(request: Request, secret: str) -> bool:
+    """Endpoints de admin: acepta el secreto en el header X-Admin-Secret o,
+    por comodidad al pegar la URL en el navegador, en ?secret=. Si
+    REPORTE_ADMIN_SECRET no está configurado, nadie queda autorizado."""
+    recibido = request.headers.get("X-Admin-Secret") or secret
+    return _secreto_valido(recibido, REPORTE_ADMIN_SECRET)
+
+
+def _no_encontrado() -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+
+_PROHIBIDO = {"status_code": 403, "content": {"status": "forbidden"}}
+
+
+def _periodo(desde: str = "", hasta: str = "") -> tuple[dt.date, dt.date]:
+    """Fechas YYYY-MM-DD → (inicio, fin). Sin fechas: semana calendario
+    actual (lunes a domingo). ValueError si son inválidas o están al revés."""
+    if desde or hasta:
+        inicio, fin = dt.date.fromisoformat(desde), dt.date.fromisoformat(hasta)
+        if fin < inicio:
+            raise ValueError("fecha final anterior a la inicial")
+        return inicio, fin
+    hoy = dt.datetime.now(ZONA_HORARIA).date()
+    inicio = hoy - dt.timedelta(days=hoy.weekday())
+    return inicio, inicio + dt.timedelta(days=6)
+
 
 # Pasos de la conversación en los que el bot ofrece un catálogo fijo de opciones
 CATALOGOS_POR_ESTADO = {
@@ -43,9 +91,9 @@ CATALOGOS_POR_ESTADO = {
 
 @app.get("/")
 def index():
-    """Health check o interfaz web local si existe."""
+    """Health check, o la interfaz web de pruebas si WEBAPP_HABILITADA."""
     index_file = STATIC_DIR / "index.html"
-    if index_file.exists():
+    if WEBAPP_HABILITADA and index_file.exists():
         return FileResponse(index_file)
     return {"status": "ok", "service": "FieldTI AI Telegram Bot"}
 
@@ -63,110 +111,54 @@ class MensajeIn(BaseModel):
 
 @app.get("/api/tecnicos")
 def listar_tecnicos():
+    if not WEBAPP_HABILITADA:
+        return _no_encontrado()
     try:
-        return {"tecnicos": sheets.listar_tecnicos()}
+        return {"tecnicos": db.listar_tecnicos()}
     except Exception as e:
-        print(f"[api/tecnicos] error listando técnicos de sheets: {e}")
-        from app.config import TECNICOS
-        return {"tecnicos": TECNICOS}
+        print(f"[api/tecnicos] error listando técnicos: {e}")
+        return JSONResponse(status_code=503, content={"tecnicos": []})
 
 
-@app.get("/evidencia/{ruta:path}")
-def servir_evidencia(ruta: str):
-    """Re-sirve un archivo de Supabase Storage sin el header X-Robots-Tag que
-    Supabase agrega por default: ese header es respetado por el fetcher de
-    imágenes de Google Sheets (=IMAGE()) y hace que la miniatura no
-    renderice, aunque la URL directa de Supabase funcione bien en el
-    navegador. Solo se usa para las miniaturas del Sheet — el link "de
-    verdad" que se guarda en la columna Evidencias sigue siendo la URL
-    directa de Supabase."""
+@app.get("/api/exportar-excel")
+def exportar_excel(request: Request, secret: str = "", desde: str = "", hasta: str = ""):
+    """Descarga el reporte en Excel del periodo `desde`–`hasta` (YYYY-MM-DD,
+    ambos inclusive). Sin fechas, usa la semana calendario actual. Protegido
+    con REPORTE_ADMIN_SECRET."""
+    if not _admin_autorizado(request, secret):
+        return JSONResponse(**_PROHIBIDO)
     try:
-        contenido, mime_type = storage.download_evidence(ruta)
-    except Exception:
-        return JSONResponse(status_code=404, content={"status": "not_found"})
-    return Response(content=contenido, media_type=mime_type)
-
-
-@app.get("/api/reporte-periodo")
-def fijar_periodo_reporte(secret: str = "", desde: str = "", hasta: str = ""):
-    """Fija el periodo del reporte contractual (celdas C13/E13 de 'Reporte
-    PDF'): con eso, las fórmulas de esa hoja recalculan solas la tabla de
-    Actividades, % de Avance Real y Tickets Atendidos por técnico a partir de
-    'Registro de Tickets' — no hay nada más que reescribir desde Python.
-    Pensado para que un admin de Qtek lo dispare a mano (pegando la URL en el
-    navegador) antes de mandar el reporte a First Majestic — no se llama
-    desde el chat.
-
-    Sin `desde`/`hasta` (formato YYYY-MM-DD), usa la semana calendario actual
-    (lunes a domingo). Protegido con REPORTE_ADMIN_SECRET.
-    """
-    if REPORTE_ADMIN_SECRET and secret != REPORTE_ADMIN_SECRET:
-        return JSONResponse(status_code=403, content={"status": "forbidden"})
-    try:
-        if desde and hasta:
-            fecha_inicio = dt.date.fromisoformat(desde)
-            fecha_fin = dt.date.fromisoformat(hasta)
-        else:
-            hoy = dt.datetime.now(sheets.ZONA_HORARIA).date()
-            fecha_inicio = hoy - dt.timedelta(days=hoy.weekday())
-            fecha_fin = fecha_inicio + dt.timedelta(days=6)
+        inicio, fin = _periodo(desde, hasta)
     except ValueError:
         return JSONResponse(
             status_code=400,
-            content={"status": "error", "detalle": "Fechas inválidas. Usa formato YYYY-MM-DD."},
+            content={"status": "error", "detalle": "Fechas inválidas. Usa desde=YYYY-MM-DD&hasta=YYYY-MM-DD."},
         )
     try:
-        sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+        contenido, nombre = excel.generar_excel(db.reportes_en_periodo(inicio, fin), inicio, fin)
     except Exception as e:
-        print(f"[reporte] error al fijar periodo: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "detalle": f"Error al actualizar Google Sheets: {e}"},
-        )
-    return {"status": "ok", "periodo": f"{fecha_inicio.isoformat()} a {fecha_fin.isoformat()}"}
-
-
-@app.get("/api/limpiar-sheet")
-def limpiar_sheet_endpoint(secret: str = ""):
-    """Elimina todos los registros de prueba (fila 4 en adelante) en la hoja 'Registro de Tickets'."""
-    if REPORTE_ADMIN_SECRET and secret != REPORTE_ADMIN_SECRET:
-        return JSONResponse(status_code=403, content={"status": "forbidden"})
-    try:
-        borrados = sheets.limpiar_registros_tickets()
-        return {"status": "ok", "registros_eliminados": borrados, "mensaje": "Google Sheet reiniciado desde cero."}
-    except Exception as e:
-        print(f"[limpiar_sheet] error: {e}")
+        print(f"[exportar-excel] error: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "detalle": str(e)})
-
-
-@app.get("/api/descargar-reporte-pdf")
-def descargar_reporte_pdf(area: str = "Todos"):
-    """Descarga el archivo PDF del Reporte Contractual desde el navegador."""
-    try:
-        pdf_bytes, filename = sheets.exportar_reporte_pdf(area=area)
-        return Response(
-            content=pdf_bytes,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-    except Exception as e:
-        print(f"[descargar-reporte-pdf] error: {e}")
-        return JSONResponse(status_code=500, content={"status": "error", "detalle": str(e)})
+    return Response(
+        content=contenido,
+        media_type=MIME_XLSX,
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
 
 
 @app.get("/api/codigo-activacion")
-def obtener_codigo_activacion(secret: str = "", nombre: str = ""):
+def obtener_codigo_activacion(request: Request, secret: str = "", nombre: str = ""):
     """Recupera el código de activación de un técnico que todavía no vinculó
     ningún chat de Telegram. Solo hace falta para el/los técnico(s) semilla
     de config.TECNICOS: como nadie les ha escrito al bot todavía, /nuevo_tecnico
     no puede mandárselo por chat (no existe ese chat). Para cualquier técnico
     agregado después con /nuevo_tecnico, el código ya sale directo en la
     respuesta de ese comando — este endpoint no hace falta. Protegido con
-    REPORTE_ADMIN_SECRET, igual que /api/reporte-periodo."""
-    if REPORTE_ADMIN_SECRET and secret != REPORTE_ADMIN_SECRET:
-        return JSONResponse(status_code=403, content={"status": "forbidden"})
+    REPORTE_ADMIN_SECRET."""
+    if not _admin_autorizado(request, secret):
+        return JSONResponse(**_PROHIBIDO)
     try:
-        codigo = sheets.codigo_activacion_pendiente(nombre)
+        codigo = db.codigo_activacion_pendiente(nombre)
     except Exception as e:
         print(f"[codigo-activacion] error consultando código: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "detalle": str(e)})
@@ -180,11 +172,13 @@ def obtener_codigo_activacion(secret: str = "", nombre: str = ""):
 
 @app.post("/api/chat")
 def chat(mensaje: MensajeIn):
+    if not WEBAPP_HABILITADA:
+        return _no_encontrado()
     try:
-        tecnicos_validos = sheets.listar_tecnicos()
-    except Exception:
-        from app.config import TECNICOS
-        tecnicos_validos = TECNICOS
+        tecnicos_validos = db.listar_tecnicos()
+    except Exception as e:
+        print(f"[api/chat] error listando técnicos: {e}")
+        tecnicos_validos = []
 
     if mensaje.tecnico not in tecnicos_validos:
         return {
@@ -210,8 +204,8 @@ def chat(mensaje: MensajeIn):
 async def telegram_webhook(request: Request):
     if WEBHOOK_SECRET:
         header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-        if header != WEBHOOK_SECRET:
-            print(f"[telegram] secret_token no coincide. Recibido={header!r}")
+        if not _secreto_valido(header, WEBHOOK_SECRET):
+            print("[telegram] secret_token no coincide; update rechazado.")
             return JSONResponse(status_code=403, content={"status": "forbidden"})
 
     try:
@@ -231,7 +225,7 @@ async def telegram_webhook(request: Request):
 
 
 def _manejar_foto(message: dict):
-    """Descarga la foto de Telegram, la sube a Google Drive / Storage y la anexa al borrador de evidencias."""
+    """Descarga la foto de Telegram, la sube a Supabase Storage y la anexa al borrador de evidencias."""
     chat_id = message["chat"]["id"]
     tecnico = _tecnico_de(chat_id)
     es_admin = tecnico in ADMIN_TECNICOS if tecnico else False
@@ -265,19 +259,18 @@ def _manejar_foto(message: dict):
         tg.send_opciones(chat_id, msg_resp, ["Omitir", "Continuar"])
     except Exception as e:
         print(f"[evidencia] error subiendo evidencia: {e}")
-        tg.send_text(chat_id, f"No pude subir la evidencia. Error: {e}", es_admin=es_admin)
+        tg.send_text(chat_id, "No pude subir la evidencia. Intenta de nuevo en un momento.", es_admin=es_admin)
 
 
 def _tecnico_de(chat_id: int) -> str | None:
     """Técnico identificado en este chat. SESIONES es solo una caché en
     memoria (se pierde si el bot se reinicia); la fuente de verdad durable
-    es el chat_id ya vinculado en la hoja 'Técnicos' (ver
-    sheets.tecnico_por_chat_id)."""
+    es el chat_id vinculado en la tabla `tecnicos` (ver db.tecnico_por_chat_id)."""
     tecnico = SESIONES.get(chat_id)
     if tecnico:
         return tecnico
     try:
-        tecnico = sheets.tecnico_por_chat_id(chat_id)
+        tecnico = db.tecnico_por_chat_id(chat_id)
         if tecnico:
             SESIONES[chat_id] = tecnico
     except Exception as e:
@@ -293,7 +286,8 @@ def _manejar_mensaje(message: dict):
         tg.send_text(chat_id, "Por ahora solo proceso mensajes de texto y fotos de evidencia.")
         return
 
-    if texto.startswith("/start"):
+    comando = texto.split()[0].lower()
+    if comando == "/start":
         _manejar_start(chat_id, texto)
         return
 
@@ -304,11 +298,11 @@ def _manejar_mensaje(message: dict):
 
     es_admin = tecnico in ADMIN_TECNICOS
 
-    if texto.startswith("/nuevo_tecnico"):
+    if comando == "/nuevo_tecnico":
         _admin_nuevo_tecnico(chat_id, tecnico, texto)
         return
-    if texto.startswith("/reporte"):
-        _admin_generar_reporte(chat_id, tecnico, texto)
+    if comando == "/reporte" or bot_logic._remover_acentos(texto) == "exportar excel":
+        _admin_exportar_excel(chat_id, tecnico, texto)
         return
 
     texto_normalizado = tg.normalizar_texto_boton(texto)
@@ -324,60 +318,6 @@ def _manejar_mensaje(message: dict):
         tg.send_opciones(chat_id, respuestas[-1], opciones)
     else:
         tg.send_text(chat_id, respuestas[-1], es_admin=es_admin)
-
-    # Si se actualizó el reporte, exportar y enviar el PDF automáticamente
-    reporte_msg = next((r for r in respuestas if "Reporte actualizado para el periodo" in r), None)
-    if reporte_msg:
-        if "Generando los 3 PDFs" in reporte_msg:
-            _enviar_3_pdfs_telegram(chat_id, reporte_msg, es_admin=es_admin)
-        else:
-            m_area = re.search(r"\(Área:\s*([^)]+)\)", reporte_msg)
-            area_sel = m_area.group(1).strip() if m_area else "Todos"
-            _enviar_pdf_telegram(chat_id, area=area_sel, es_admin=es_admin)
-
-
-def _enviar_pdf_telegram(chat_id: int, area: str = "Todos", es_admin: bool = False):
-    try:
-        tg.send_text(chat_id, f"Generando y descargando archivo PDF ({area})...", con_teclado=False)
-        pdf_bytes, filename = sheets.exportar_reporte_pdf(area=area)
-        tg.send_document(
-            chat_id,
-            pdf_bytes,
-            filename,
-            caption=f"📄 {filename}\nListo para enviar o imprimir.",
-        )
-    except Exception as e:
-        print(f"[telegram_pdf] error exportando PDF: {e}")
-        tg.send_text(chat_id, f"Aviso: El reporte se actualizó en Sheets, pero no pude generar el archivo PDF directo ({e}).", es_admin=es_admin)
-
-
-def _enviar_3_pdfs_telegram(chat_id: int, reporte_msg: str, es_admin: bool = False):
-    try:
-        m_fechas = re.search(r"periodo\s+(\d{4}-\d{2}-\d{2})\s+al\s+(\d{4}-\d{2}-\d{2})", reporte_msg)
-        if m_fechas:
-            f_ini = dt.date.fromisoformat(m_fechas.group(1))
-            f_fin = dt.date.fromisoformat(m_fechas.group(2))
-        else:
-            hoy = dt.datetime.now(sheets.ZONA_HORARIA).date()
-            f_ini = hoy - dt.timedelta(days=hoy.weekday())
-            f_fin = f_ini + dt.timedelta(days=6)
-
-        tg.send_text(chat_id, "Generando los 3 archivos PDF (General, Infraestructura y Soporte)...", con_teclado=False)
-        for area, rotulo in [
-            ("Todos", "🌐 Reporte General (Infraestructura y Soporte)"),
-            ("Infraestructura", "🏗️ Reporte Departamento de Infraestructura"),
-            ("Soporte", "💻 Reporte Departamento de Soporte"),
-        ]:
-            sheets.set_periodo_reporte(f_ini, f_fin, area=area)
-            pdf_bytes, filename = sheets.exportar_reporte_pdf(area=area)
-            tg.send_document(chat_id, pdf_bytes, filename, caption=f"{rotulo}\n📄 {filename}")
-
-        # Dejar la hoja en modo General (Todos)
-        sheets.set_periodo_reporte(f_ini, f_fin, area="Todos")
-        tg.send_text(chat_id, "✅ Los 3 reportes PDF fueron enviados con éxito.", es_admin=es_admin)
-    except Exception as e:
-        print(f"[telegram_3_pdfs] error: {e}")
-        tg.send_text(chat_id, f"Aviso: Hubo un problema al generar los 3 PDFs ({e}).", es_admin=es_admin)
 
 
 def _manejar_start(chat_id: int, texto: str):
@@ -398,7 +338,7 @@ def _manejar_start(chat_id: int, texto: str):
         return
 
     try:
-        nombre = sheets.activar_tecnico_por_codigo(codigo, chat_id)
+        nombre = db.activar_tecnico_por_codigo(codigo, chat_id)
     except Exception as e:
         print(f"[start] error activando técnico: {e}")
         tg.send_text(chat_id, "Hubo un error de conexión con la base de datos. Intenta más tarde.", con_teclado=False)
@@ -422,51 +362,50 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
         tg.send_text(chat_id, "Usa: /nuevo_tecnico Nombre Completo", con_teclado=False)
         return
     try:
-        codigo = sheets.agregar_tecnico(nombre)
+        codigo = db.agregar_tecnico(nombre)
     except Exception as e:
         print(f"[nuevo_tecnico] error: {e}")
-        tg.send_text(chat_id, f"Error al agregar técnico: {e}")
+        tg.send_text(chat_id, "No pude agregar al técnico por un error con la base de datos. Intenta más tarde.", es_admin=True)
         return
 
     if not codigo:
-        tg.send_text(chat_id, f"{nombre} ya estaba en la lista de técnicos.")
+        tg.send_text(chat_id, f"{nombre} ya estaba en la lista de técnicos.", es_admin=True)
         return
     tg.send_text(
         chat_id,
         f"Técnico agregado: {nombre}.\n"
         f"Mándale este código para que active su cuenta (funciona una sola vez):\n"
         f"/start {codigo}",
+        es_admin=True,
     )
 
 
-def _admin_generar_reporte(chat_id: int, tecnico: str, texto: str):
+def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):
+    """/reporte → semana actual; /reporte AAAA-MM-DD AAAA-MM-DD → ese periodo.
+    El botón '📊 Exportar Excel' equivale a /reporte sin fechas."""
     if tecnico not in ADMIN_TECNICOS:
         tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
         return
-    partes = texto.split()[1:]
+    partes = texto.split()[1:] if texto.split()[0].lower() == "/reporte" else []
     try:
-        if len(partes) == 2:
-            fecha_inicio = dt.date.fromisoformat(partes[0])
-            fecha_fin = dt.date.fromisoformat(partes[1])
-        elif not partes:
-            hoy = dt.datetime.now(sheets.ZONA_HORARIA).date()
-            fecha_inicio = hoy - dt.timedelta(days=hoy.weekday())
-            fecha_fin = fecha_inicio + dt.timedelta(days=6)
-        else:
+        if len(partes) not in (0, 2):
             raise ValueError
+        inicio, fin = _periodo(*partes)
     except ValueError:
-        tg.send_text(chat_id, "Usa: /reporte  o  /reporte AAAA-MM-DD AAAA-MM-DD", con_teclado=False)
+        tg.send_text(chat_id, "Usa: /reporte  o  /reporte AAAA-MM-DD AAAA-MM-DD", es_admin=True)
         return
 
+    tg.send_text(chat_id, f"Generando Excel del {inicio.isoformat()} al {fin.isoformat()}…", con_teclado=False)
     try:
-        sheets.set_periodo_reporte(fecha_inicio, fecha_fin)
+        reportes = db.reportes_en_periodo(inicio, fin)
+        contenido, nombre = excel.generar_excel(reportes, inicio, fin)
     except Exception as e:
-        print(f"[reporte] error: {e}")
-        tg.send_text(chat_id, f"Error actualizando el reporte en Sheets: {e}", con_teclado=False)
+        print(f"[exportar_excel] error: {e}")
+        tg.send_text(chat_id, "No pude generar el Excel. Intenta más tarde.", es_admin=True)
         return
-
-    tg.send_text(
-        chat_id,
-        f"Reporte listo para el periodo {fecha_inicio.isoformat()} a {fecha_fin.isoformat()}.",
+    tg.send_document(
+        chat_id, contenido, nombre,
+        caption=f"📊 {len(reportes)} reporte(s) del {inicio.isoformat()} al {fin.isoformat()}.\n"
+                f"Otro periodo: /reporte AAAA-MM-DD AAAA-MM-DD",
+        mime_type=MIME_XLSX,
     )
-    _enviar_pdf_telegram(chat_id, es_admin=True)
