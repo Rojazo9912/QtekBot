@@ -44,7 +44,7 @@ El sistema obtiene automáticamente: Técnico, Fecha, Hora, Número de reporte.
 ## 2. Flujo principal (implementado)
 
 ### Paso 1 — Ticket
-🎫 **Ingresa el número de ticket:** Obligatorio, texto libre, sin IA de por medio.
+🎫 **Ingresa el número de ticket:** Texto libre (ej. `TK-001254`) o botón **Sin ticket** (si no se cuenta con ticket, genera automáticamente un folio temporal con fecha y hora `S/T-AAMMDD-HHMMSS`).
 
 ### Paso 2 — Ubicación
 📍 **Lista fija por botones:** Nivel 10 / Nivel 11 / Nivel 12 / Otra. Configurable editando una lista en el código (no requiere base de datos aparte).

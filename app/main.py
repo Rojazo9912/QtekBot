@@ -79,7 +79,7 @@ def _periodo(desde: str = "", hasta: str = "") -> tuple[dt.date, dt.date]:
 
 # Pasos de la conversación en los que el bot ofrece un catálogo fijo de opciones
 CATALOGOS_POR_ESTADO = {
-    "ticket": [],
+    "ticket": ["Sin ticket"],
     "ubicacion": CATALOGO_UBICACION,
     "actividad": [],
     "estado": CATALOGO_ESTADO_REPORTE,

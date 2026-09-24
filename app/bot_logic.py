@@ -40,6 +40,42 @@ def _remover_acentos(texto: str) -> str:
     return " ".join(limpio.lower().split())
 
 
+_SIN_TICKET_KEYWORDS = (
+    "sin ticket",
+    "sin tickets",
+    "no tengo ticket",
+    "no tengo tickets",
+    "no tengo",
+    "no hay ticket",
+    "no hay",
+    "omitir",
+    "s/t",
+    "st",
+    "n/a",
+    "na",
+    "ninguno",
+    "ninguna",
+    "sin folio",
+    "sin orden",
+)
+
+
+def generar_ticket_temporal() -> str:
+    """Genera un identificador temporal para reportes sin ticket oficial,
+    ej. 'S/T-260924-092530'."""
+    ahora = _ahora()
+    return f"S/T-{ahora.strftime('%y%m%d-%H%M%S')}"
+
+
+def _es_sin_ticket(texto: str) -> bool:
+    t = _remover_acentos(texto)
+    if t in _SIN_TICKET_KEYWORDS:
+        return True
+    if t.startswith("sin ticket") or t.startswith("no tengo"):
+        return True
+    return False
+
+
 def _normalizar_estado(texto: str) -> str:
     t = _remover_acentos(texto)
     if "terminado" in t or "finalizar" in t or "concluido" in t or "listo" in t:
@@ -99,7 +135,11 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         # Reiniciar borrador y comenzar Paso 1 (Ticket)
         estado.borrador = {"evidencias": []}
         estado.esperando = "ticket"
-        decir("🎫 *Paso 1 de 5 — Ticket*\n\nIngresa el número de ticket u orden de trabajo (obligatorio, ej. TK-001254):")
+        decir(
+            "🎫 *Paso 1 de 5 — Ticket*\n\n"
+            "Ingresa el número de ticket u orden de trabajo (ej. TK-001254).\n"
+            "Si no cuentas con ticket, pulsa *'Sin ticket'* o escribe *'Sin ticket'*:"
+        )
         return respuestas
 
     if t_norm in ("mis pendientes", "mis actividades", "/pendientes"):
@@ -159,7 +199,13 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
     # Paso 1: Ticket
     if estado.esperando == "ticket":
-        estado.borrador["ticket"] = texto_limpio
+        if _es_sin_ticket(texto_limpio):
+            ticket_asignado = generar_ticket_temporal()
+            estado.borrador["ticket"] = ticket_asignado
+            decir(f"🎫 Se asignó el ticket temporal: *{ticket_asignado}*")
+        else:
+            estado.borrador["ticket"] = texto_limpio
+
         estado.esperando = "ubicacion"
         opciones_ubicacion = "\n".join([f"• {u}" for u in CATALOGO_UBICACION])
         decir(f"📍 *Paso 2 de 5 — Ubicación*\n\nSelecciona la ubicación de la lista o escribe una:\n{opciones_ubicacion}")
@@ -259,7 +305,11 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         elif t_norm in ("editar", "corregir", "reiniciar"):
             estado.borrador = {"evidencias": []}
             estado.esperando = "ticket"
-            decir("✏️ Reiniciando el reporte.\n\n🎫 *Paso 1 de 5 — Ticket*\n\nIngresa el número de ticket (obligatorio):")
+            decir(
+                "✏️ Reiniciando el reporte.\n\n"
+                "🎫 *Paso 1 de 5 — Ticket*\n\n"
+                "Ingresa el número de ticket (o pulsa *'Sin ticket'* si no tienes):"
+            )
             return respuestas
 
         elif t_norm in ("cancelar", "no"):

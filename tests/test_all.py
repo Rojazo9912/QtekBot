@@ -13,6 +13,8 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test_token")
 from app.bot_logic import (
     _remover_acentos,
     _normalizar_estado,
+    _es_sin_ticket,
+    generar_ticket_temporal,
     procesar_mensaje_web,
 )
 from app.config import ADMIN_TECNICOS
@@ -20,7 +22,7 @@ from app.state import get_estado
 from app import db, excel
 from openpyxl import load_workbook
 from fastapi.testclient import TestClient
-from app.main import app
+from app.main import app, CATALOGOS_POR_ESTADO
 
 
 class TestBotLogicPRDv11(unittest.TestCase):
@@ -105,6 +107,75 @@ class TestBotLogicPRDv11(unittest.TestCase):
             evidencias=[],
         )
         self.assertIn("#001", resp7[0])
+
+    def test_generar_ticket_temporal(self):
+        t = generar_ticket_temporal()
+        self.assertTrue(t.startswith("S/T-"))
+        self.assertGreaterEqual(len(t), 10)
+
+    def test_es_sin_ticket(self):
+        self.assertTrue(_es_sin_ticket("Sin ticket"))
+        self.assertTrue(_es_sin_ticket("sin ticket"))
+        self.assertTrue(_es_sin_ticket("S/T"))
+        self.assertTrue(_es_sin_ticket("s/t"))
+        self.assertTrue(_es_sin_ticket("st"))
+        self.assertTrue(_es_sin_ticket("No tengo ticket"))
+        self.assertTrue(_es_sin_ticket("omitir"))
+        self.assertTrue(_es_sin_ticket("N/A"))
+        self.assertTrue(_es_sin_ticket("ninguno"))
+        self.assertFalse(_es_sin_ticket("TK-001"))
+        self.assertFalse(_es_sin_ticket("12345"))
+
+    def test_catalogos_por_estado_ticket(self):
+        self.assertIn("Sin ticket", CATALOGOS_POR_ESTADO.get("ticket", []))
+
+    @patch("app.db.crear_reporte", return_value="#002")
+    def test_flujo_sin_ticket_guardado_completo(self, mock_crear):
+        estado = get_estado("TecnicoEstandar")
+
+        # 1. Inicio -> Pide ticket (con opción Sin ticket)
+        resp1 = procesar_mensaje_web("TecnicoEstandar", "➕ Nuevo reporte")
+        self.assertEqual(estado.esperando, "ticket")
+        self.assertIn("sin ticket", resp1[0].lower())
+
+        # 2. Responde 'Sin ticket' -> asigna ticket temporal y pide Ubicación
+        resp2 = procesar_mensaje_web("TecnicoEstandar", "Sin ticket")
+        self.assertEqual(estado.esperando, "ubicacion")
+        ticket_asignado = estado.borrador["ticket"]
+        self.assertTrue(ticket_asignado.startswith("S/T-"))
+        self.assertIn("ticket temporal", resp2[0].lower())
+        self.assertIn("paso 2", resp2[1].lower())
+
+        # 3. Ubicación -> Actividad
+        procesar_mensaje_web("TecnicoEstandar", "Nivel 11")
+        self.assertEqual(estado.esperando, "actividad")
+
+        # 4. Actividad -> Estado
+        procesar_mensaje_web("TecnicoEstandar", "Revisión de radio")
+        self.assertEqual(estado.esperando, "estado")
+
+        # 5. Estado -> Evidencia
+        procesar_mensaje_web("TecnicoEstandar", "Terminado")
+        self.assertEqual(estado.esperando, "evidencia")
+
+        # 6. Omitir Evidencia -> Confirmación
+        resp_conf = procesar_mensaje_web("TecnicoEstandar", "Omitir")
+        self.assertEqual(estado.esperando, "confirmacion")
+        self.assertIn(ticket_asignado, resp_conf[0])
+
+        # 7. Guardar -> db.crear_reporte con el ticket temporal generado
+        resp_guardar = procesar_mensaje_web("TecnicoEstandar", "Guardar")
+        self.assertIsNone(estado.esperando)
+        self.assertEqual(estado.borrador, {})
+        mock_crear.assert_called_once_with(
+            ticket=ticket_asignado,
+            tecnico="TecnicoEstandar",
+            ubicacion="Nivel 11",
+            actividad="Revisión de radio",
+            estado="Terminado",
+            evidencias=[],
+        )
+        self.assertIn("#002", resp_guardar[0])
 
     @patch("app.db.agregar_tecnico", return_value="ABC123")
     def test_admin_flujo_nuevo_tecnico(self, mock_agregar):
