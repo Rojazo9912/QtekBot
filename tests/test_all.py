@@ -354,8 +354,16 @@ class TestDB(unittest.TestCase):
         tabla.select.return_value.gte.return_value.lt.assert_called_once_with("creado", "2026-09-28T00:00:00-06:00")
 
 
+def _png(ancho=400, alto=300) -> bytes:
+    from PIL import Image as PILImage
+    buf = io.BytesIO()
+    PILImage.new("RGB", (ancho, alto), "red").save(buf, format="PNG")
+    return buf.getvalue()
+
+
 class TestExcel(unittest.TestCase):
-    def test_genera_hojas_y_datos(self):
+    @patch("app.excel._descargar", side_effect=lambda url: _png())
+    def test_genera_hojas_y_datos(self, _descargar):
         reportes = [
             db._reporte_desde_fila(_fila_db(1, "Terminado", ["https://x/1.jpg", "https://x/2.jpg"])),
             db._reporte_desde_fila(_fila_db(2, "Pendiente", tecnico="Ana")),
@@ -369,12 +377,25 @@ class TestExcel(unittest.TestCase):
         self.assertEqual(ws["A2"].value, "#001")
         self.assertEqual(ws["F3"].value, "Pendiente")
         self.assertEqual(ws["G2"].value, 2)  # número de fotos
+        self.assertEqual(ws["K1"].value, "Evidencias")
+        # Dos miniaturas ancladas a la celda K2 del reporte #001
+        self.assertEqual(len(ws._images), 2)
+        self.assertTrue(all(img.anchor._from.row == 1 and img.anchor._from.col == 10 for img in ws._images))
+        self.assertTrue(all(img.height == 120 for img in ws._images))
         ev = wb["Evidencias"]
         self.assertEqual(ev["D3"].value, "https://x/2.jpg")
         self.assertEqual(ev["D3"].hyperlink.target, "https://x/2.jpg")
         resumen = [c.value for fila in wb["Resumen"].iter_rows() for c in fila]
         self.assertIn("Total de reportes", resumen)
         self.assertIn("Ana", resumen)
+
+    @patch("app.excel._descargar", side_effect=[b"%PDF-1.4 no es imagen", None])
+    def test_evidencia_no_imagen_o_caida(self, _descargar):
+        reportes = [db._reporte_desde_fila(_fila_db(1, evidencias=["https://x/a.pdf", "https://x/b.jpg"]))]
+        contenido, _ = excel.generar_excel(reportes, dt.date(2026, 9, 21), dt.date(2026, 9, 27))
+        ws = load_workbook(io.BytesIO(contenido))["Reportes"]
+        self.assertEqual(len(ws._images), 0)
+        self.assertEqual(ws["K2"].value, "Ver hoja Evidencias")
 
     def test_periodo_vacio(self):
         contenido, _ = excel.generar_excel([], dt.date(2026, 1, 1), dt.date(2026, 1, 7))

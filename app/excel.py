@@ -5,16 +5,24 @@ que el admin lo pide; no se guarda en el servidor.
 
 Hojas:
 - Resumen: datos del contrato, periodo y totales por estado, técnico y ubicación.
-- Reportes: una fila por reporte, con filtros.
+- Reportes: una fila por reporte, con filtros y las fotos en miniatura
+  dentro de la celda "Evidencias".
 - Evidencias: una fila por foto, con link.
 """
 import datetime as dt
 import io
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
+import httpx
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.units import pixels_to_EMU
+from PIL import Image as PILImage
 
 from app.config import CATALOGO_ESTADO_REPORTE, CONTRATO_INFO, ZONA_HORARIA
 
@@ -33,6 +41,53 @@ _RELLENO_ENCABEZADO = PatternFill("solid", fgColor=_AZUL)
 _RELLENO_GRIS = PatternFill("solid", fgColor=_GRIS)
 _BORDE = Border(bottom=Side(style="thin", color="D9D9D9"))
 _ARRIBA = Alignment(vertical="top", wrap_text=True)
+
+# Miniaturas de evidencia dentro de la hoja Reportes.
+_MINI_ALTO_PX = 120
+_MINI_ANCHO_MAX_PX = 200
+_MINI_MARGEN_PX = 4
+_MINI_MAX_POR_REPORTE = 6
+
+
+def _descargar(url: str) -> Optional[bytes]:
+    try:
+        res = httpx.get(url, timeout=15, follow_redirects=True)
+        res.raise_for_status()
+        return res.content
+    except Exception as e:
+        print(f"[excel] no se pudo descargar la evidencia {url}: {e}")
+        return None
+
+
+def _miniatura(contenido: bytes) -> Optional[tuple[io.BytesIO, int, int]]:
+    """Reduce la foto a _MINI_ALTO_PX de alto (JPEG). None si no es imagen
+    (p. ej. un PDF): esa evidencia queda solo como link en la hoja Evidencias."""
+    try:
+        img = PILImage.open(io.BytesIO(contenido))
+        img = img.convert("RGB")
+    except Exception:
+        return None
+    img.thumbnail((_MINI_ANCHO_MAX_PX, _MINI_ALTO_PX))
+    salida = io.BytesIO()
+    img.save(salida, format="JPEG", quality=80)
+    salida.seek(0)
+    return salida, img.width, img.height
+
+
+def _miniaturas_por_url(reportes: list[dict]) -> dict[str, tuple[io.BytesIO, int, int]]:
+    urls = list(dict.fromkeys(
+        url for r in reportes for url in r["evidencias"][:_MINI_MAX_POR_REPORTE]
+    ))
+    if not urls:
+        return {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        descargas = list(pool.map(_descargar, urls))
+    miniaturas = {}
+    for url, contenido in zip(urls, descargas):
+        mini = _miniatura(contenido) if contenido else None
+        if mini:
+            miniaturas[url] = mini
+    return miniaturas
 
 
 def _encabezados(ws, fila: int, titulos: list[str], col_inicio: int = 1) -> None:
@@ -110,14 +165,37 @@ def _hoja_resumen(ws, reportes: list[dict], desde: dt.date, hasta: dt.date) -> N
     )
 
 
+def _insertar_miniaturas(ws, fila: int, col: int, minis: list[tuple[io.BytesIO, int, int]]) -> int:
+    """Pone las fotos una junto a otra dentro de la celda (fila, col).
+    Se anclan a la celda, así que se ocultan con la fila al filtrar.
+    Regresa el ancho total usado en píxeles."""
+    x = _MINI_MARGEN_PX
+    for datos, ancho, alto in minis:
+        img = XLImage(datos)
+        img.width, img.height = ancho, alto
+        img.anchor = TwoCellAnchor(
+            editAs="twoCell",
+            _from=AnchorMarker(col=col - 1, colOff=pixels_to_EMU(x),
+                               row=fila - 1, rowOff=pixels_to_EMU(_MINI_MARGEN_PX)),
+            to=AnchorMarker(col=col - 1, colOff=pixels_to_EMU(x + ancho),
+                            row=fila - 1, rowOff=pixels_to_EMU(_MINI_MARGEN_PX + alto)),
+        )
+        ws.add_image(img)
+        x += ancho + _MINI_MARGEN_PX
+    return x
+
+
 def _hoja_reportes(ws, reportes: list[dict]) -> None:
     titulos = [
         "Número", "Ticket", "Técnico", "Ubicación", "Actividad", "Estado",
-        "Fotos", "Fecha", "Hora", "Última actualización",
+        "Fotos", "Fecha", "Hora", "Última actualización", "Evidencias",
     ]
     _encabezados(ws, 1, titulos)
-    _anchos(ws, [10, 16, 28, 14, 60, 16, 8, 12, 10, 20])
+    _anchos(ws, [10, 16, 28, 14, 60, 16, 8, 12, 10, 20, 30])
     ws.freeze_panes = "A2"
+    col_evidencias = len(titulos)
+    miniaturas = _miniaturas_por_url(reportes)
+    ancho_max_px = 0
 
     for i, r in enumerate(reportes, start=2):
         valores = [
@@ -131,6 +209,20 @@ def _hoja_reportes(ws, reportes: list[dict]) -> None:
         color = _COLOR_ESTADO.get(r["estado"])
         if color:
             ws.cell(row=i, column=6).fill = PatternFill("solid", fgColor=color)
+
+        minis = [miniaturas[u] for u in r["evidencias"][:_MINI_MAX_POR_REPORTE] if u in miniaturas]
+        if minis:
+            ancho_px = _insertar_miniaturas(ws, i, col_evidencias, minis)
+            ancho_max_px = max(ancho_max_px, ancho_px)
+            # Puntos = píxeles * 3/4
+            ws.row_dimensions[i].height = (_MINI_ALTO_PX + 2 * _MINI_MARGEN_PX) * 0.75
+        elif r["evidencias"]:
+            ws.cell(row=i, column=col_evidencias, value="Ver hoja Evidencias").alignment = _ARRIBA
+
+    if ancho_max_px:
+        # Ancho de columna en caracteres ≈ (píxeles - 5) / 7
+        letra = get_column_letter(col_evidencias)
+        ws.column_dimensions[letra].width = max(30, (ancho_max_px - 5) / 7 + 1)
 
     ultima = max(1, len(reportes)) + 1
     ws.auto_filter.ref = f"A1:{get_column_letter(len(titulos))}{ultima}"
