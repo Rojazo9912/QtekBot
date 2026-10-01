@@ -112,7 +112,7 @@ Una sola hoja **"Reportes"** con estas columnas:
 |---|---|---|
 | **Numero** | Consecutivo #001, #002… | Automático |
 | **Ticket** | Texto libre, obligatorio | Técnico |
-| **Tecnico** | Nombre del técnico | Automático (por sesión) |
+| **Departamento** | Infraestructura | Automático |
 | **Ubicacion** | De la lista fija, o texto si "Otra" | Técnico (botón) |
 | **Actividad** | Descripción; se le anexan actualizaciones | Técnico |
 | **Estado** | Terminado / Pendiente / No solucionado | Técnico (botón) |

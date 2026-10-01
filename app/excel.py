@@ -4,7 +4,7 @@ de la base de datos (ver db.reportes_en_periodo). Se arma en memoria cada vez
 que el admin lo pide; no se guarda en el servidor.
 
 Hojas:
-- Resumen: datos del contrato, periodo y totales por estado, técnico y ubicación.
+- Resumen: datos del contrato, periodo y totales por estado, departamento y ubicación.
 - Reportes: una fila por reporte, con filtros y las fotos en miniatura
   dentro de la celda "Evidencias".
 - Evidencias: una fila por foto, con link.
@@ -148,14 +148,12 @@ def _hoja_resumen(ws, reportes: list[dict], desde: dt.date, hasta: dt.date) -> N
         [[e, por_estado.get(e, 0)] for e in CATALOGO_ESTADO_REPORTE] if reportes else [],
     )
 
-    tecnicos = sorted({r["tecnico"] for r in reportes})
     fila = _tabla_conteo(
-        ws, fila, "Por técnico", ["Técnico", "Total", *CATALOGO_ESTADO_REPORTE],
+        ws, fila, "Por departamento", ["Departamento", "Total", *CATALOGO_ESTADO_REPORTE],
         [
-            [t, sum(1 for r in reportes if r["tecnico"] == t)]
-            + [sum(1 for r in reportes if r["tecnico"] == t and r["estado"] == e) for e in CATALOGO_ESTADO_REPORTE]
-            for t in tecnicos
-        ],
+            ["Infraestructura", len(reportes)]
+            + [sum(1 for r in reportes if r["estado"] == e) for e in CATALOGO_ESTADO_REPORTE]
+        ] if reportes else [],
     )
 
     por_ubicacion = Counter(r["ubicacion"] for r in reportes)
@@ -187,7 +185,7 @@ def _insertar_miniaturas(ws, fila: int, col: int, minis: list[tuple[io.BytesIO, 
 
 def _hoja_reportes(ws, reportes: list[dict]) -> None:
     titulos = [
-        "Número", "Ticket", "Técnico", "Ubicación", "Actividad", "Estado",
+        "Número", "Ticket", "Departamento", "Ubicación", "Actividad", "Estado",
         "Fotos", "Fecha", "Hora", "Última actualización", "Evidencias",
     ]
     _encabezados(ws, 1, titulos)
@@ -199,7 +197,7 @@ def _hoja_reportes(ws, reportes: list[dict]) -> None:
 
     for i, r in enumerate(reportes, start=2):
         valores = [
-            r["numero"], r["ticket"], r["tecnico"], r["ubicacion"], r["actividad"],
+            r["numero"], r["ticket"], "Infraestructura", r["ubicacion"], r["actividad"],
             r["estado"], len(r["evidencias"]), r["fecha"], r["hora"], r["actualizado"],
         ]
         for j, v in enumerate(valores, start=1):

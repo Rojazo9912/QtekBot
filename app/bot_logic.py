@@ -291,7 +291,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
                     f"• *Ubicación:* {b.get('ubicacion')}\n"
                     f"• *Actividad:* {b.get('actividad')}\n"
                     f"• *Estado:* {b.get('estado')}\n"
-                    f"• *Técnico:* {tecnico}\n"
+                    f"• *Departamento:* Infraestructura\n"
                     f"• *Fecha:* {now.strftime('%Y-%m-%d')}\n"
                     f"• *Hora:* {now.strftime('%H:%M:%S')}"
                 )

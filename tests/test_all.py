@@ -107,6 +107,7 @@ class TestBotLogicPRDv11(unittest.TestCase):
             evidencias=[],
         )
         self.assertIn("#001", resp7[0])
+        self.assertIn("• *Departamento:* Infraestructura", resp7[0])
 
     def test_generar_ticket_temporal(self):
         t = generar_ticket_temporal()
@@ -375,6 +376,8 @@ class TestExcel(unittest.TestCase):
         self.assertEqual(wb.sheetnames, ["Resumen", "Reportes", "Evidencias"])
         ws = wb["Reportes"]
         self.assertEqual(ws["A2"].value, "#001")
+        self.assertEqual(ws["C1"].value, "Departamento")
+        self.assertEqual(ws["C2"].value, "Infraestructura")
         self.assertEqual(ws["F3"].value, "Pendiente")
         self.assertEqual(ws["G2"].value, 2)  # número de fotos
         self.assertEqual(ws["K1"].value, "Evidencias")
@@ -387,7 +390,8 @@ class TestExcel(unittest.TestCase):
         self.assertEqual(ev["D3"].hyperlink.target, "https://x/2.jpg")
         resumen = [c.value for fila in wb["Resumen"].iter_rows() for c in fila]
         self.assertIn("Total de reportes", resumen)
-        self.assertIn("Ana", resumen)
+        self.assertIn("Por departamento", resumen)
+        self.assertIn("Infraestructura", resumen)
 
     @patch("app.excel._descargar", side_effect=[b"%PDF-1.4 no es imagen", None])
     def test_evidencia_no_imagen_o_caida(self, _descargar):
