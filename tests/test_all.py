@@ -401,6 +401,22 @@ class TestExcel(unittest.TestCase):
         self.assertEqual(len(ws._images), 0)
         self.assertEqual(ws["K2"].value, "Ver hoja Evidencias")
 
+    @patch("app.excel.httpx.get")
+    @patch("app.storage.get_client")
+    def test_descarga_por_storage_aunque_bucket_privado(self, mock_client, mock_get):
+        bucket = mock_client.return_value.storage.from_.return_value
+        bucket.download.return_value = b"jpg"
+        url = "https://abc.supabase.co/storage/v1/object/public/evidencias/evidencia_Juan_file%201.jpg"
+        self.assertEqual(excel._descargar(url), b"jpg")
+        bucket.download.assert_called_once_with("evidencia_Juan_file 1.jpg")
+        mock_get.assert_not_called()
+
+    @patch("app.excel.httpx.get")
+    @patch("app.storage.get_client", side_effect=RuntimeError("sin supabase"))
+    def test_descarga_cae_a_link_publico(self, _client, mock_get):
+        mock_get.return_value.content = b"jpg"
+        self.assertEqual(excel._descargar("https://otro.sitio/foto.jpg"), b"jpg")
+
     def test_periodo_vacio(self):
         contenido, _ = excel.generar_excel([], dt.date(2026, 1, 1), dt.date(2026, 1, 7))
         wb = load_workbook(io.BytesIO(contenido))

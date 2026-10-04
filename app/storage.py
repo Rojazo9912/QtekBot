@@ -12,6 +12,8 @@ Setup (una sola vez):
 """
 import mimetypes
 import os
+from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from app.supabase_client import get_client
 
@@ -55,3 +57,22 @@ def upload_evidence(contenido: bytes, nombre_archivo: str, mime_type: str = "ima
     # El SDK (storage3) siempre concatena "?" al final, incluso sin
     # parámetros de query; lo quitamos para guardar un link limpio.
     return url.rstrip("?")
+
+
+def ruta_desde_url(url: str) -> Optional[str]:
+    """".../storage/v1/object/public/<bucket>/<ruta>" → "<ruta>".
+    None si el link no es de este bucket."""
+    marca = f"/object/public/{SUPABASE_BUCKET}/"
+    camino = urlparse(url).path
+    if marca not in camino:
+        return None
+    return unquote(camino.split(marca, 1)[1])
+
+
+def descargar_evidencia(url: str) -> bytes:
+    """Descarga una evidencia guardada con upload_evidence. Usa la
+    service_role key, así que funciona aunque el bucket no sea público."""
+    ruta = ruta_desde_url(url)
+    if ruta is None:
+        raise ValueError(f"El link no es del bucket {SUPABASE_BUCKET}: {url}")
+    return get_client().storage.from_(SUPABASE_BUCKET).download(ruta)

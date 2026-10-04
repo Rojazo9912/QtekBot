@@ -24,6 +24,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.units import pixels_to_EMU
 from PIL import Image as PILImage
 
+from app import storage
 from app.config import CATALOGO_ESTADO_REPORTE, CONTRATO_INFO, ZONA_HORARIA
 
 _AZUL = "1F3864"
@@ -50,6 +51,12 @@ _MINI_MAX_POR_REPORTE = 6
 
 
 def _descargar(url: str) -> Optional[bytes]:
+    """Primero por Supabase Storage (funciona aunque el bucket sea privado);
+    si falla, por el link público."""
+    try:
+        return storage.descargar_evidencia(url)
+    except Exception as e:
+        print(f"[excel] Storage no pudo descargar {url}: {e}")
     try:
         res = httpx.get(url, timeout=15, follow_redirects=True)
         res.raise_for_status()
