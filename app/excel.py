@@ -66,7 +66,7 @@ def _descargar(url: str) -> Optional[bytes]:
         return None
 
 
-def _miniatura(contenido: bytes) -> Optional[tuple[io.BytesIO, int, int]]:
+def _miniatura(contenido: bytes) -> Optional[tuple[bytes, int, int]]:
     """Reduce la foto a _MINI_ALTO_PX de alto (JPEG). None si no es imagen
     (p. ej. un PDF): esa evidencia queda solo como link en la hoja Evidencias."""
     try:
@@ -77,11 +77,10 @@ def _miniatura(contenido: bytes) -> Optional[tuple[io.BytesIO, int, int]]:
     img.thumbnail((_MINI_ANCHO_MAX_PX, _MINI_ALTO_PX))
     salida = io.BytesIO()
     img.save(salida, format="JPEG", quality=80)
-    salida.seek(0)
-    return salida, img.width, img.height
+    return salida.getvalue(), img.width, img.height
 
 
-def _miniaturas_por_url(reportes: list[dict]) -> dict[str, tuple[io.BytesIO, int, int]]:
+def _miniaturas_por_url(reportes: list[dict]) -> dict[str, tuple[bytes, int, int]]:
     urls = list(dict.fromkeys(
         url for r in reportes for url in r["evidencias"][:_MINI_MAX_POR_REPORTE]
     ))
@@ -170,13 +169,15 @@ def _hoja_resumen(ws, reportes: list[dict], desde: dt.date, hasta: dt.date) -> N
     )
 
 
-def _insertar_miniaturas(ws, fila: int, col: int, minis: list[tuple[io.BytesIO, int, int]]) -> int:
+def _insertar_miniaturas(ws, fila: int, col: int, minis: list[tuple[bytes, int, int]]) -> int:
     """Pone las fotos una junto a otra dentro de la celda (fila, col).
     Se anclan a la celda, así que se ocultan con la fila al filtrar.
     Regresa el ancho total usado en píxeles."""
     x = _MINI_MARGEN_PX
     for datos, ancho, alto in minis:
-        img = XLImage(datos)
+        # Un BytesIO nuevo por imagen: openpyxl lo cierra al guardar, y la
+        # misma foto puede aparecer en más de un reporte.
+        img = XLImage(io.BytesIO(datos))
         img.width, img.height = ancho, alto
         img.anchor = TwoCellAnchor(
             editAs="twoCell",

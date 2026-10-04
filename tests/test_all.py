@@ -417,6 +417,12 @@ class TestExcel(unittest.TestCase):
         mock_get.return_value.content = b"jpg"
         self.assertEqual(excel._descargar("https://otro.sitio/foto.jpg"), b"jpg")
 
+    @patch("app.excel._descargar", side_effect=lambda url: _png())
+    def test_misma_foto_en_varios_reportes(self, _descargar):
+        reportes = [db._reporte_desde_fila(_fila_db(i, evidencias=["https://x/a.jpg"])) for i in (1, 2)]
+        contenido, _ = excel.generar_excel(reportes, dt.date(2026, 9, 21), dt.date(2026, 9, 27))
+        self.assertEqual(len(load_workbook(io.BytesIO(contenido))["Reportes"]._images), 2)
+
     def test_periodo_vacio(self):
         contenido, _ = excel.generar_excel([], dt.date(2026, 1, 1), dt.date(2026, 1, 7))
         wb = load_workbook(io.BytesIO(contenido))
