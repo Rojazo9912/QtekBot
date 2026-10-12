@@ -146,6 +146,7 @@ def crear_reporte(
     ubicacion: str,
     actividad: str,
     estado: str,
+    departamento: str = "Infraestructura",
     evidencias: Optional[list[str]] = None,
 ) -> str:
     """Guarda un reporte nuevo y regresa su número (#001, #002…)."""
@@ -155,6 +156,7 @@ def crear_reporte(
         "ubicacion": ubicacion.strip(),
         "actividad": actividad.strip(),
         "estado": estado.strip(),
+        "departamento": departamento.strip(),
         "evidencias": evidencias or [],
     }).execute()
     return formatear_numero(res.data[0]["id"])
@@ -219,3 +221,35 @@ def reportes_en_periodo(desde: dt.date, hasta: dt.date) -> list[dict]:
         .order("id").execute()
     )
     return [_reporte_desde_fila(f) for f in res.data]
+
+# --- Catálogos dinámicos ---
+def listar_departamentos() -> list[str]:
+    res = get_client().table("departamentos").select("nombre").eq("activo", True).order("nombre").execute()
+    return [f["nombre"] for f in res.data]
+
+
+def agregar_departamento(nombre: str) -> bool:
+    nombre = " ".join(nombre.split())
+    if not nombre or len(nombre) > 100:
+        return False
+    existente = get_client().table("departamentos").select("id").ilike("nombre", nombre).limit(1).execute()
+    if existente.data:
+        return False
+    get_client().table("departamentos").insert({"nombre": nombre}).execute()
+    return True
+
+
+def listar_zonas() -> list[str]:
+    res = get_client().table("zonas").select("nombre").eq("activo", True).order("nombre").execute()
+    return [f["nombre"] for f in res.data]
+
+
+def asegurar_zona(nombre: str) -> str:
+    nombre = " ".join(nombre.split())
+    if not nombre or len(nombre) > 160:
+        raise ValueError("Nombre de zona inválido")
+    existente = get_client().table("zonas").select("nombre").ilike("nombre", nombre).limit(1).execute()
+    if existente.data:
+        return existente.data[0]["nombre"]
+    res = get_client().table("zonas").insert({"nombre": nombre}).execute()
+    return res.data[0]["nombre"]

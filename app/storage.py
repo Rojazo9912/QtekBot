@@ -15,6 +15,8 @@ import os
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
+MAX_EVIDENCE_BYTES = 10 * 1024 * 1024
+
 from app.supabase_client import get_client
 
 SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "evidencias")
@@ -29,6 +31,13 @@ def upload_evidence(contenido: bytes, nombre_archivo: str, mime_type: str = "ima
     """Sube una foto o archivo a Supabase Storage.
     Devuelve la URL pública permanente del archivo.
     """
+    if not contenido:
+        raise ValueError("La evidencia está vacía")
+    if len(contenido) > MAX_EVIDENCE_BYTES:
+        raise ValueError("La evidencia supera el límite de 10 MB")
+    if not mime_type.startswith("image/"):
+        raise ValueError("Solo se permiten evidencias de imagen")
+
     client = get_client()
 
     # Inferir mime_type por extensión si viene genérico

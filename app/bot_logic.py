@@ -206,12 +206,34 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         else:
             estado.borrador["ticket"] = texto_limpio
 
-        estado.esperando = "ubicacion"
-        opciones_ubicacion = "\n".join([f"• {u}" for u in CATALOGO_UBICACION])
-        decir(f"📍 *Paso 2 de 5 — Ubicación*\n\nSelecciona la ubicación de la lista o escribe una:\n{opciones_ubicacion}")
+        estado.esperando = "departamento"
+        try:
+            departamentos = db.listar_departamentos()
+        except Exception:
+            departamentos = ["Infraestructura"]
+        decir("🏢 *Paso 2 — Departamento*\n\nSelecciona el departamento:\n" + "\n".join(f"• {d}" for d in departamentos))
         return respuestas
 
-    # Paso 2: Ubicación
+    # Paso 2: Departamento
+    if estado.esperando == "departamento":
+        try:
+            departamentos = db.listar_departamentos()
+        except Exception:
+            departamentos = ["Infraestructura"]
+        departamento = next((d for d in departamentos if _remover_acentos(d) == t_norm), None)
+        if not departamento:
+            decir("Selecciona un departamento válido de la lista.")
+            return respuestas
+        estado.borrador["departamento"] = departamento
+        estado.esperando = "ubicacion"
+        try:
+            zonas = db.listar_zonas()
+        except Exception:
+            zonas = CATALOGO_UBICACION
+        decir("📍 *Paso 3 — Zona*\n\nSelecciona la zona o escribe Otra:\n" + "\n".join(f"• {z}" for z in zonas))
+        return respuestas
+
+    # Paso 3: Ubicación
     if estado.esperando == "ubicacion":
         if t_norm in ("otra", "otra ubicacion"):
             estado.esperando = "ubicacion_otra"
@@ -233,7 +255,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         return respuestas
 
     if estado.esperando == "ubicacion_otra":
-        estado.borrador["ubicacion"] = texto_limpio
+        estado.borrador["ubicacion"] = db.asegurar_zona(texto_limpio)
         estado.esperando = "actividad"
         decir("📝 *Paso 3 de 5 — Actividad*\n\nDescribe brevemente la actividad realizada:")
         return respuestas
@@ -281,6 +303,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
                     ubicacion=b.get("ubicacion", "Nivel 10"),
                     actividad=b.get("actividad", ""),
                     estado=b.get("estado", "Terminado"),
+                    departamento=b.get("departamento", "Infraestructura"),
                     evidencias=b.get("evidencias", []),
                 )
                 now = _ahora()

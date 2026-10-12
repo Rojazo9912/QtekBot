@@ -13,7 +13,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from PIL import Image
 
 from app import telegram_client as tg
 from app import db, excel, storage, bot_logic
@@ -53,7 +54,7 @@ def _admin_autorizado(request: Request, secret: str) -> bool:
     """Endpoints de admin: acepta el secreto en el header X-Admin-Secret o,
     por comodidad al pegar la URL en el navegador, en ?secret=. Si
     REPORTE_ADMIN_SECRET no está configurado, nadie queda autorizado."""
-    recibido = request.headers.get("X-Admin-Secret") or secret
+    recibido = request.headers.get("X-Admin-Secret")
     return _secreto_valido(recibido, REPORTE_ADMIN_SECRET)
 
 
@@ -121,11 +122,11 @@ def listar_tecnicos():
 
 
 @app.get("/api/exportar-excel")
-def exportar_excel(request: Request, secret: str = "", desde: str = "", hasta: str = ""):
+def exportar_excel(request: Request, desde: str = "", hasta: str = ""):
     """Descarga el reporte en Excel del periodo `desde`–`hasta` (YYYY-MM-DD,
     ambos inclusive). Sin fechas, usa la semana calendario actual. Protegido
     con REPORTE_ADMIN_SECRET."""
-    if not _admin_autorizado(request, secret):
+    if not _admin_autorizado(request, ""):
         return JSONResponse(**_PROHIBIDO)
     try:
         inicio, fin = _periodo(desde, hasta)
@@ -147,7 +148,7 @@ def exportar_excel(request: Request, secret: str = "", desde: str = "", hasta: s
 
 
 @app.get("/api/codigo-activacion")
-def obtener_codigo_activacion(request: Request, secret: str = "", nombre: str = ""):
+def obtener_codigo_activacion(request: Request, nombre: str = ""):
     """Recupera el código de activación de un técnico que todavía no vinculó
     ningún chat de Telegram. Solo hace falta para el/los técnico(s) semilla
     de config.TECNICOS: como nadie les ha escrito al bot todavía, /nuevo_tecnico
@@ -155,7 +156,7 @@ def obtener_codigo_activacion(request: Request, secret: str = "", nombre: str = 
     agregado después con /nuevo_tecnico, el código ya sale directo en la
     respuesta de ese comando — este endpoint no hace falta. Protegido con
     REPORTE_ADMIN_SECRET."""
-    if not _admin_autorizado(request, secret):
+    if not _admin_autorizado(request, ""):
         return JSONResponse(**_PROHIBIDO)
     try:
         codigo = db.codigo_activacion_pendiente(nombre)
@@ -202,11 +203,10 @@ def chat(mensaje: MensajeIn):
 # Webhook para Telegram Bot
 @app.post("/telegram-webhook")
 async def telegram_webhook(request: Request):
-    if WEBHOOK_SECRET:
-        header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-        if not _secreto_valido(header, WEBHOOK_SECRET):
-            print("[telegram] secret_token no coincide; update rechazado.")
-            return JSONResponse(status_code=403, content={"status": "forbidden"})
+    header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if not _secreto_valido(header, WEBHOOK_SECRET):
+        print("[telegram] secret_token ausente, inválido o no configurado; update rechazado.")
+        return JSONResponse(status_code=403, content={"status": "forbidden"})
 
     try:
         update = await request.json()
@@ -245,6 +245,9 @@ def _manejar_foto(message: dict):
             mime_type = "image/jpeg"
         elif "document" in message:
             doc = message["document"]
+            if doc.get("file_size", 0) > 10 * 1024 * 1024:
+                tg.send_text(chat_id, "La evidencia supera el límite de 10 MB.", es_admin=es_admin)
+                return
             file_id = doc["file_id"]
             mime_type = doc.get("mime_type", "application/octet-stream")
         else:
@@ -252,6 +255,18 @@ def _manejar_foto(message: dict):
             return
 
         contenido, file_path = tg.descargar_archivo(file_id)
+        if len(contenido) > 10 * 1024 * 1024:
+            tg.send_text(chat_id, "La evidencia supera el límite de 10 MB.", es_admin=es_admin)
+            return
+        if not mime_type.startswith("image/"):
+            tg.send_text(chat_id, "Solo se permiten imágenes como evidencia.", es_admin=es_admin)
+            return
+        try:
+            with Image.open(io.BytesIO(contenido)) as imagen:
+                imagen.verify()
+        except Exception:
+            tg.send_text(chat_id, "El archivo no es una imagen válida.", es_admin=es_admin)
+            return
         nombre_archivo = f"evidencia_{tecnico.replace(' ', '_')}_{file_path.split('/')[-1]}"
 
         url = storage.upload_evidence(contenido, nombre_archivo, mime_type=mime_type)
@@ -300,6 +315,12 @@ def _manejar_mensaje(message: dict):
 
     if comando == "/nuevo_tecnico":
         _admin_nuevo_tecnico(chat_id, tecnico, texto)
+        return
+    if comando == "/nuevo_departamento":
+        _admin_nuevo_departamento(chat_id, tecnico, texto)
+        return
+    if comando == "/departamentos":
+        _admin_listar_departamentos(chat_id, tecnico)
         return
     if comando == "/reporte" or bot_logic._remover_acentos(texto) == "exportar excel":
         _admin_exportar_excel(chat_id, tecnico, texto)
@@ -409,3 +430,34 @@ def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):
                 f"Otro periodo: /reporte AAAA-MM-DD AAAA-MM-DD",
         mime_type=MIME_XLSX,
     )
+
+
+def _admin_nuevo_departamento(chat_id: int, tecnico: str, texto: str):
+    if tecnico not in ADMIN_TECNICOS:
+        tg.send_text(chat_id, "No tienes permiso para crear departamentos.", con_teclado=False)
+        return
+    nombre = texto.removeprefix("/nuevo_departamento").strip()
+    if not nombre:
+        tg.send_text(chat_id, "Usa: /nuevo_departamento Nombre", con_teclado=False)
+        return
+    try:
+        creado = db.agregar_departamento(nombre)
+    except Exception as e:
+        print(f"[nuevo_departamento] error: {e}")
+        tg.send_text(chat_id, "No pude crear el departamento. Intenta más tarde.", es_admin=True)
+        return
+    tg.send_text(chat_id, (f"✅ Departamento creado: {nombre}" if creado else f"El departamento {nombre} ya existe."), es_admin=True)
+
+
+def _admin_listar_departamentos(chat_id: int, tecnico: str):
+    if tecnico not in ADMIN_TECNICOS:
+        tg.send_text(chat_id, "No tienes permiso para consultar departamentos.", con_teclado=False)
+        return
+    try:
+        nombres = db.listar_departamentos()
+    except Exception as e:
+        print(f"[departamentos] error: {e}")
+        tg.send_text(chat_id, "No pude consultar los departamentos.", es_admin=True)
+        return
+    texto = "🏢 Departamentos disponibles:\n\n" + ("\n".join(f"{i}. {n}" for i, n in enumerate(nombres, 1)) or "No hay departamentos registrados.")
+    tg.send_text(chat_id, texto, es_admin=True)
