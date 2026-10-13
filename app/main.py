@@ -350,13 +350,16 @@ def _manejar_mensaje(message: dict):
         return
 
     for r in respuestas[:-1]:
-        tg.send_text(chat_id, r, es_admin=es_admin)
+        tg.send_text(chat_id, r, con_teclado=False)
 
-    opciones = _obtener_opciones(get_estado(tecnico).esperando)
+    esperando = get_estado(tecnico).esperando
+    opciones = _obtener_opciones(esperando)
     if opciones:
         tg.send_opciones(chat_id, respuestas[-1], opciones)
+    elif esperando:
+        tg.send_opciones(chat_id, respuestas[-1], ["❌ Cancelar"])
     else:
-        tg.send_text(chat_id, respuestas[-1], es_admin=es_admin)
+        tg.send_text(chat_id, respuestas[-1], con_teclado=True, es_admin=es_admin)
 
 
 def _manejar_start(chat_id: int, texto: str):

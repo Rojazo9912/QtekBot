@@ -22,14 +22,12 @@ _FILAS_MENU = [
 TECLADO_ACCIONES = {
     "keyboard": _FILAS_MENU,
     "resize_keyboard": True,
-    "is_persistent": True,
 }
 
 # Teclado persistente exclusivo para administradores
 TECLADO_ADMIN = {
     "keyboard": _FILAS_MENU + [[{"text": "👤 + Nuevo técnico"}, {"text": "📊 Exportar Excel"}]],
     "resize_keyboard": True,
-    "is_persistent": True,
 }
 
 # Frases comunes y botones del teclado anterior (v1.0, que puede seguir
@@ -68,17 +66,37 @@ def send_text(chat_id: int, texto: str, con_teclado: bool = True, es_admin: bool
         print(f"[telegram] error enviando mensaje: {e}")
 
 
+def _agrupar_botones(opciones: list[str]) -> list[list[dict]]:
+    """Agrupa botones cortos en filas de 2 para mejor visualización en pantalla móvil."""
+    filas = []
+    fila_actual = []
+    for o in opciones:
+        # Botones de confirmación o cancelación van en su propia fila completa
+        if len(o) > 22 or "cancelar" in o.lower() or "guardar" in o.lower():
+            if fila_actual:
+                filas.append(fila_actual)
+                fila_actual = []
+            filas.append([{"text": o}])
+        else:
+            fila_actual.append({"text": o})
+            if len(fila_actual) == 2:
+                filas.append(fila_actual)
+                fila_actual = []
+    if fila_actual:
+        filas.append(fila_actual)
+    return filas
+
+
 def send_opciones(chat_id: int, texto: str, opciones: list[str]) -> None:
-    """Teclado de respuesta rápida, una opción por fila (catálogos fijos
-    como Tipo de Falla o Prioridad). Es de un solo uso: en cuanto el técnico
-    responde, Telegram lo reemplaza por el teclado persistente de atajos."""
+    """Teclado de opciones activas para el paso actual. No es one-time para que
+    los botones no desaparezcan inesperadamente hasta que el bot envíe el siguiente paso."""
     if not TOKEN:
         print("[telegram] AVISO: TELEGRAM_BOT_TOKEN no está configurado.")
         return
     teclado = {
-        "keyboard": [[{"text": o}] for o in opciones],
+        "keyboard": _agrupar_botones(opciones),
         "resize_keyboard": True,
-        "one_time_keyboard": True,
+        "one_time_keyboard": False,
     }
     payload = {"chat_id": chat_id, "text": texto, "reply_markup": teclado}
     try:
