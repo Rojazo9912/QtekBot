@@ -48,6 +48,7 @@ def _reporte_desde_fila(fila: dict) -> dict:
         "numero": formatear_numero(fila["id"]),
         "ticket": fila["ticket"],
         "tecnico": fila["tecnico"],
+        "departamento": fila.get("departamento") or "Infraestructura",
         "ubicacion": fila["ubicacion"],
         "actividad": fila["actividad"],
         "estado": fila["estado"],
@@ -146,19 +147,46 @@ def crear_reporte(
     ubicacion: str,
     actividad: str,
     estado: str,
-    departamento: str = "Infraestructura",
+    departamento: str | list[str] = "Infraestructura",
     evidencias: Optional[list[str]] = None,
 ) -> str:
     """Guarda un reporte nuevo y regresa su número (#001, #002…)."""
-    res = get_client().table("reportes").insert({
+    if isinstance(departamento, list) and evidencias is None:
+        evidencias = departamento
+        departamento_str = "Infraestructura"
+    elif isinstance(departamento, str):
+        departamento_str = departamento.strip()
+    else:
+        departamento_str = "Infraestructura"
+
+    payload = {
         "ticket": ticket.strip(),
         "tecnico": tecnico.strip(),
         "ubicacion": ubicacion.strip(),
         "actividad": actividad.strip(),
         "estado": estado.strip(),
-        "departamento": departamento.strip(),
+        "departamento": departamento_str,
         "evidencias": evidencias or [],
-    }).execute()
+        "creado_por": tecnico.strip(),
+    }
+
+    client = get_client()
+
+    try:
+        dep_res = client.table("departamentos").select("id").ilike("nombre", departamento_str).limit(1).execute()
+        if dep_res.data:
+            payload["departamento_id"] = dep_res.data[0]["id"]
+    except Exception:
+        pass
+
+    try:
+        zona_res = client.table("zonas").select("id").ilike("nombre", ubicacion.strip()).limit(1).execute()
+        if zona_res.data:
+            payload["zona_id"] = zona_res.data[0]["id"]
+    except Exception:
+        pass
+
+    res = client.table("reportes").insert(payload).execute()
     return formatear_numero(res.data[0]["id"])
 
 

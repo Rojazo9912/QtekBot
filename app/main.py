@@ -8,6 +8,7 @@ Comando de inicio: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 """
 import datetime as dt
 import hmac
+import io
 import os
 from pathlib import Path
 from fastapi import FastAPI, Request, Response
@@ -50,11 +51,11 @@ def _secreto_valido(recibido: str | None, esperado: str | None) -> bool:
     return hmac.compare_digest(recibido.encode(), esperado.encode())
 
 
-def _admin_autorizado(request: Request, secret: str) -> bool:
+def _admin_autorizado(request: Request, secret: str = "") -> bool:
     """Endpoints de admin: acepta el secreto en el header X-Admin-Secret o,
     por comodidad al pegar la URL en el navegador, en ?secret=. Si
     REPORTE_ADMIN_SECRET no está configurado, nadie queda autorizado."""
-    recibido = request.headers.get("X-Admin-Secret")
+    recibido = request.headers.get("X-Admin-Secret") or request.query_params.get("secret")
     return _secreto_valido(recibido, REPORTE_ADMIN_SECRET)
 
 
@@ -81,6 +82,7 @@ def _periodo(desde: str = "", hasta: str = "") -> tuple[dt.date, dt.date]:
 # Pasos de la conversación en los que el bot ofrece un catálogo fijo de opciones
 CATALOGOS_POR_ESTADO = {
     "ticket": ["Sin ticket"],
+    "departamento": [],
     "ubicacion": CATALOGO_UBICACION,
     "actividad": [],
     "estado": CATALOGO_ESTADO_REPORTE,
@@ -88,6 +90,22 @@ CATALOGOS_POR_ESTADO = {
     "confirmacion": ["✅ Guardar", "✏️ Editar", "❌ Cancelar"],
     "continuar_pendiente_estado": CATALOGO_ESTADO_REPORTE,
 }
+
+
+def _obtener_opciones(esperando: str | None) -> list[str]:
+    if not esperando:
+        return []
+    if esperando == "departamento":
+        try:
+            return db.listar_departamentos()
+        except Exception:
+            return ["Infraestructura"]
+    if esperando == "ubicacion":
+        try:
+            return db.listar_zonas() + ["Otra"]
+        except Exception:
+            return CATALOGO_UBICACION + ["Otra"]
+    return CATALOGOS_POR_ESTADO.get(esperando, [])
 
 
 @app.get("/")
@@ -190,7 +208,7 @@ def chat(mensaje: MensajeIn):
         }
     respuestas = procesar_mensaje_web(mensaje.tecnico, mensaje.texto)
     estado = get_estado(mensaje.tecnico)
-    opciones = CATALOGOS_POR_ESTADO.get(estado.esperando, [])
+    opciones = _obtener_opciones(estado.esperando)
     es_admin = mensaje.tecnico in ADMIN_TECNICOS
     return {
         "respuestas": respuestas,
@@ -334,7 +352,7 @@ def _manejar_mensaje(message: dict):
     for r in respuestas[:-1]:
         tg.send_text(chat_id, r, es_admin=es_admin)
 
-    opciones = CATALOGOS_POR_ESTADO.get(get_estado(tecnico).esperando)
+    opciones = _obtener_opciones(get_estado(tecnico).esperando)
     if opciones:
         tg.send_opciones(chat_id, respuestas[-1], opciones)
     else:

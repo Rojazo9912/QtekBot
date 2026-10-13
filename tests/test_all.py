@@ -57,7 +57,7 @@ class TestBotLogicPRDv11(unittest.TestCase):
         self.assertEqual(estado.borrador, {})
 
     @patch("app.db.crear_reporte", return_value="#001")
-    def test_flujo_completo_5_pasos(self, mock_crear):
+    def test_flujo_completo_7_pasos(self, mock_crear):
         estado = get_estado("TecnicoEstandar")
 
         # 1. Inicio -> Pide ticket
@@ -65,37 +65,44 @@ class TestBotLogicPRDv11(unittest.TestCase):
         self.assertEqual(estado.esperando, "ticket")
         self.assertIn("paso 1", resp1[0].lower())
 
-        # 2. Enviar Ticket -> Pide Ubicación
+        # 2. Enviar Ticket -> Pide Departamento
         resp2 = procesar_mensaje_web("TecnicoEstandar", "TK-9988")
-        self.assertEqual(estado.esperando, "ubicacion")
+        self.assertEqual(estado.esperando, "departamento")
         self.assertEqual(estado.borrador["ticket"], "TK-9988")
         self.assertIn("paso 2", resp2[0].lower())
 
-        # 3. Enviar Ubicación -> Pide Actividad
-        resp3 = procesar_mensaje_web("TecnicoEstandar", "Nivel 10")
-        self.assertEqual(estado.esperando, "actividad")
-        self.assertEqual(estado.borrador["ubicacion"], "Nivel 10")
+        # 3. Enviar Departamento -> Pide Ubicación / Zona
+        resp3 = procesar_mensaje_web("TecnicoEstandar", "Infraestructura")
+        self.assertEqual(estado.esperando, "ubicacion")
+        self.assertEqual(estado.borrador["departamento"], "Infraestructura")
         self.assertIn("paso 3", resp3[0].lower())
 
-        # 4. Enviar Actividad -> Pide Estado
-        resp4 = procesar_mensaje_web("TecnicoEstandar", "Mantenimiento a Leaky Feeder")
-        self.assertEqual(estado.esperando, "estado")
-        self.assertEqual(estado.borrador["actividad"], "Mantenimiento a Leaky Feeder")
+        # 4. Enviar Ubicación -> Pide Actividad
+        resp4 = procesar_mensaje_web("TecnicoEstandar", "Nivel 10")
+        self.assertEqual(estado.esperando, "actividad")
+        self.assertEqual(estado.borrador["ubicacion"], "Nivel 10")
         self.assertIn("paso 4", resp4[0].lower())
 
-        # 5. Enviar Estado -> Pide Evidencia
-        resp5 = procesar_mensaje_web("TecnicoEstandar", "Terminado")
-        self.assertEqual(estado.esperando, "evidencia")
-        self.assertEqual(estado.borrador["estado"], "Terminado")
+        # 5. Enviar Actividad -> Pide Estado
+        resp5 = procesar_mensaje_web("TecnicoEstandar", "Mantenimiento a Leaky Feeder")
+        self.assertEqual(estado.esperando, "estado")
+        self.assertEqual(estado.borrador["actividad"], "Mantenimiento a Leaky Feeder")
         self.assertIn("paso 5", resp5[0].lower())
 
-        # 6. Omitir Evidencia -> Pide Confirmación
-        resp6 = procesar_mensaje_web("TecnicoEstandar", "Omitir")
-        self.assertEqual(estado.esperando, "confirmacion")
-        self.assertIn("confirmación", resp6[0].lower())
+        # 6. Enviar Estado -> Pide Evidencia
+        resp6 = procesar_mensaje_web("TecnicoEstandar", "Terminado")
+        self.assertEqual(estado.esperando, "evidencia")
+        self.assertEqual(estado.borrador["estado"], "Terminado")
+        self.assertIn("paso 6", resp6[0].lower())
 
-        # 7. Guardar -> Llama a db.crear_reporte y confirma con #001
-        resp7 = procesar_mensaje_web("TecnicoEstandar", "Guardar")
+        # 7. Omitir Evidencia -> Pide Confirmación
+        resp7 = procesar_mensaje_web("TecnicoEstandar", "Omitir")
+        self.assertEqual(estado.esperando, "confirmacion")
+        self.assertIn("confirmación", resp7[0].lower())
+        self.assertIn("Infraestructura", resp7[0])
+
+        # 8. Guardar -> Llama a db.crear_reporte y confirma con #001
+        resp8 = procesar_mensaje_web("TecnicoEstandar", "Guardar")
         self.assertIsNone(estado.esperando)
         self.assertEqual(estado.borrador, {})
         mock_crear.assert_called_once_with(
@@ -104,10 +111,11 @@ class TestBotLogicPRDv11(unittest.TestCase):
             ubicacion="Nivel 10",
             actividad="Mantenimiento a Leaky Feeder",
             estado="Terminado",
+            departamento="Infraestructura",
             evidencias=[],
         )
-        self.assertIn("#001", resp7[0])
-        self.assertIn("• *Departamento:* Infraestructura", resp7[0])
+        self.assertIn("#001", resp8[0])
+        self.assertIn("• *Departamento:* Infraestructura", resp8[0])
 
     def test_generar_ticket_temporal(self):
         t = generar_ticket_temporal()
@@ -139,32 +147,38 @@ class TestBotLogicPRDv11(unittest.TestCase):
         self.assertEqual(estado.esperando, "ticket")
         self.assertIn("sin ticket", resp1[0].lower())
 
-        # 2. Responde 'Sin ticket' -> asigna ticket temporal y pide Ubicación
+        # 2. Responde 'Sin ticket' -> asigna ticket temporal y pide Departamento
         resp2 = procesar_mensaje_web("TecnicoEstandar", "Sin ticket")
-        self.assertEqual(estado.esperando, "ubicacion")
+        self.assertEqual(estado.esperando, "departamento")
         ticket_asignado = estado.borrador["ticket"]
         self.assertTrue(ticket_asignado.startswith("S/T-"))
         self.assertIn("ticket temporal", resp2[0].lower())
         self.assertIn("paso 2", resp2[1].lower())
 
-        # 3. Ubicación -> Actividad
+        # 3. Departamento -> Ubicación
+        resp3 = procesar_mensaje_web("TecnicoEstandar", "Infraestructura")
+        self.assertEqual(estado.esperando, "ubicacion")
+        self.assertIn("paso 3", resp3[0].lower())
+
+        # 4. Ubicación -> Actividad
         procesar_mensaje_web("TecnicoEstandar", "Nivel 11")
         self.assertEqual(estado.esperando, "actividad")
 
-        # 4. Actividad -> Estado
+        # 5. Actividad -> Estado
         procesar_mensaje_web("TecnicoEstandar", "Revisión de radio")
         self.assertEqual(estado.esperando, "estado")
 
-        # 5. Estado -> Evidencia
+        # 6. Estado -> Evidencia
         procesar_mensaje_web("TecnicoEstandar", "Terminado")
         self.assertEqual(estado.esperando, "evidencia")
 
-        # 6. Omitir Evidencia -> Confirmación
+        # 7. Omitir Evidencia -> Confirmación
         resp_conf = procesar_mensaje_web("TecnicoEstandar", "Omitir")
         self.assertEqual(estado.esperando, "confirmacion")
         self.assertIn(ticket_asignado, resp_conf[0])
+        self.assertIn("Infraestructura", resp_conf[0])
 
-        # 7. Guardar -> db.crear_reporte con el ticket temporal generado
+        # 8. Guardar -> db.crear_reporte con el ticket temporal generado
         resp_guardar = procesar_mensaje_web("TecnicoEstandar", "Guardar")
         self.assertIsNone(estado.esperando)
         self.assertEqual(estado.borrador, {})
@@ -174,6 +188,7 @@ class TestBotLogicPRDv11(unittest.TestCase):
             ubicacion="Nivel 11",
             actividad="Revisión de radio",
             estado="Terminado",
+            departamento="Infraestructura",
             evidencias=[],
         )
         self.assertIn("#002", resp_guardar[0])
@@ -254,6 +269,31 @@ class TestBotLogicPRDv11(unittest.TestCase):
         resp = procesar_mensaje_web("TecnicoEstandar", "más o menos")
         self.assertEqual(estado.esperando, "estado")
         self.assertIn("Elige uno de estos estados", resp[0])
+
+    @patch("app.db.asegurar_zona", return_value="Nivel 15")
+    def test_zona_otra_auto_registra(self, mock_asegurar):
+        estado = get_estado("TecnicoEstandar")
+        estado.esperando = "ubicacion"
+        estado.borrador = {"ticket": "TK-1", "departamento": "Infraestructura"}
+
+        resp = procesar_mensaje_web("TecnicoEstandar", "Otra")
+        self.assertEqual(estado.esperando, "ubicacion_otra")
+        self.assertIn("personalizada", resp[0].lower())
+
+        resp2 = procesar_mensaje_web("TecnicoEstandar", "Nivel 15")
+        self.assertEqual(estado.esperando, "actividad")
+        self.assertEqual(estado.borrador["ubicacion"], "Nivel 15")
+        mock_asegurar.assert_called_once_with("Nivel 15")
+
+    def test_departamento_invalido_repregunta(self):
+        estado = get_estado("TecnicoEstandar")
+        estado.esperando = "departamento"
+        estado.borrador = {"ticket": "TK-1"}
+
+        with patch("app.db.listar_departamentos", return_value=["Infraestructura"]):
+            resp = procesar_mensaje_web("TecnicoEstandar", "Inexistente")
+            self.assertEqual(estado.esperando, "departamento")
+            self.assertIn("válido", resp[0].lower())
 
 
 class TestBotonesConEmoji(unittest.TestCase):
@@ -428,6 +468,23 @@ class TestExcel(unittest.TestCase):
         wb = load_workbook(io.BytesIO(contenido))
         self.assertEqual(wb["Reportes"].max_row, 1)
 
+    def test_excel_multiples_departamentos(self):
+        reportes = [
+            {"numero": "#001", "ticket": "TK-1", "tecnico": "Juan", "departamento": "Infraestructura",
+             "ubicacion": "Nivel 10", "actividad": "Act 1", "estado": "Terminado", "evidencias": [],
+             "fecha": "2026-09-22", "hora": "10:00:00", "actualizado": "2026-09-22 10:00:00"},
+            {"numero": "#002", "ticket": "TK-2", "tecnico": "Ana", "departamento": "Mantenimiento",
+             "ubicacion": "Nivel 11", "actividad": "Act 2", "estado": "Pendiente", "evidencias": [],
+             "fecha": "2026-09-22", "hora": "11:00:00", "actualizado": "2026-09-22 11:00:00"},
+        ]
+        contenido, _ = excel.generar_excel(reportes, dt.date(2026, 9, 21), dt.date(2026, 9, 27))
+        wb = load_workbook(io.BytesIO(contenido))
+        ws = wb["Reportes"]
+        self.assertEqual(ws["C2"].value, "Infraestructura")
+        self.assertEqual(ws["C3"].value, "Mantenimiento")
+        resumen = [c.value for fila in wb["Resumen"].iter_rows() for c in fila]
+        self.assertIn("Mantenimiento", resumen)
+
 
 class TestFastAPIEndpoints(unittest.TestCase):
     def setUp(self):
@@ -438,17 +495,23 @@ class TestFastAPIEndpoints(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json(), {"status": "healthy"})
 
+    @patch("app.main.WEBHOOK_SECRET", "test_secret")
     @patch("app.main._tecnico_de", return_value="TecnicoEstandar")
     @patch("app.telegram_client.send_opciones")
     @patch("app.telegram_client.send_text")
     def test_telegram_webhook(self, mock_send, mock_opciones, mock_tecnico):
-        res = self.client.post("/telegram-webhook", json={"message": {"chat": {"id": 12345}, "text": "Hola"}})
+        res = self.client.post(
+            "/telegram-webhook",
+            json={"message": {"chat": {"id": 12345}, "text": "Hola"}},
+            headers={"X-Telegram-Bot-Api-Secret-Token": "test_secret"},
+        )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json(), {"status": "ok"})
 
+    @patch("app.main.WEBHOOK_SECRET", "test_secret")
     @patch("app.main._tecnico_de", return_value="TecnicoEstandar")
-    @patch("app.telegram_client.descargar_archivo", return_value=(b"fakebytes", "evidencias/test.jpg"))
-    @patch("app.storage.upload_evidence", return_value="https://storage/test.jpg")
+    @patch("app.telegram_client.descargar_archivo", return_value=(_png(), "evidencias/test.png"))
+    @patch("app.storage.upload_evidence", return_value="https://storage/test.png")
     @patch("app.telegram_client.send_opciones")
     @patch("app.telegram_client.send_text")
     def test_telegram_webhook_foto(self, mock_send_text, mock_send_opciones, mock_upload, mock_download, mock_tecnico):
@@ -459,6 +522,7 @@ class TestFastAPIEndpoints(unittest.TestCase):
         res = self.client.post(
             "/telegram-webhook",
             json={"message": {"chat": {"id": 12345}, "photo": [{"file_id": "file_123"}]}},
+            headers={"X-Telegram-Bot-Api-Secret-Token": "test_secret"},
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json(), {"status": "ok"})
@@ -527,7 +591,12 @@ class TestComandoReporteTelegram(unittest.TestCase):
         self.client = TestClient(app)
 
     def _mandar(self, texto):
-        return self.client.post("/telegram-webhook", json={"message": {"chat": {"id": 1}, "text": texto}})
+        with patch("app.main.WEBHOOK_SECRET", "test_secret"):
+            return self.client.post(
+                "/telegram-webhook",
+                json={"message": {"chat": {"id": 1}, "text": texto}},
+                headers={"X-Telegram-Bot-Api-Secret-Token": "test_secret"},
+            )
 
     @patch("app.main._tecnico_de", return_value="Miguel Abraham Lopez Ortiz")
     @patch("app.db.reportes_en_periodo", return_value=[])
@@ -564,6 +633,22 @@ class TestComandoReporteTelegram(unittest.TestCase):
         self._mandar("/reportes")
         mock_doc.assert_not_called()
         mock_mis.assert_called_once()
+
+    @patch("app.main._tecnico_de", return_value="Miguel Abraham Lopez Ortiz")
+    @patch("app.db.agregar_departamento", return_value=True)
+    @patch("app.telegram_client.send_text")
+    def test_admin_crea_departamento(self, mock_texto, mock_db, _tec):
+        self._mandar("/nuevo_departamento Mantenimiento")
+        mock_db.assert_called_once_with("Mantenimiento")
+        self.assertIn("creado", mock_texto.call_args[0][1].lower())
+
+    @patch("app.main._tecnico_de", return_value="Miguel Abraham Lopez Ortiz")
+    @patch("app.db.listar_departamentos", return_value=["Infraestructura", "Mantenimiento"])
+    @patch("app.telegram_client.send_text")
+    def test_admin_lista_departamentos(self, mock_texto, mock_db, _tec):
+        self._mandar("/departamentos")
+        mock_db.assert_called_once()
+        self.assertIn("Mantenimiento", mock_texto.call_args[0][1])
 
 
 if __name__ == "__main__":

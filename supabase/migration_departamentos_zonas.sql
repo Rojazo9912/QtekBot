@@ -21,9 +21,14 @@ insert into zonas (nombre)
 values ('Nivel 10'), ('Nivel 11'), ('Nivel 12')
 on conflict (nombre) do nothing;
 
+alter table reportes add column if not exists departamento text default 'Infraestructura';
 alter table reportes add column if not exists departamento_id bigint references departamentos(id);
 alter table reportes add column if not exists zona_id bigint references zonas(id);
 alter table reportes add column if not exists creado_por text;
+
+update reportes
+set departamento = 'Infraestructura'
+where departamento is null;
 
 update reportes
 set departamento_id = (select id from departamentos where nombre = 'Infraestructura')

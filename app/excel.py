@@ -154,12 +154,15 @@ def _hoja_resumen(ws, reportes: list[dict], desde: dt.date, hasta: dt.date) -> N
         [[e, por_estado.get(e, 0)] for e in CATALOGO_ESTADO_REPORTE] if reportes else [],
     )
 
+    deptos = sorted(set(r.get("departamento", "Infraestructura") for r in reportes))
+    filas_depto = []
+    for d in deptos:
+        reps_d = [r for r in reportes if r.get("departamento", "Infraestructura") == d]
+        filas_depto.append([d, len(reps_d)] + [sum(1 for r in reps_d if r["estado"] == e) for e in CATALOGO_ESTADO_REPORTE])
+
     fila = _tabla_conteo(
         ws, fila, "Por departamento", ["Departamento", "Total", *CATALOGO_ESTADO_REPORTE],
-        [
-            ["Infraestructura", len(reportes)]
-            + [sum(1 for r in reportes if r["estado"] == e) for e in CATALOGO_ESTADO_REPORTE]
-        ] if reportes else [],
+        filas_depto if reportes else [],
     )
 
     por_ubicacion = Counter(r["ubicacion"] for r in reportes)
@@ -205,7 +208,7 @@ def _hoja_reportes(ws, reportes: list[dict]) -> None:
 
     for i, r in enumerate(reportes, start=2):
         valores = [
-            r["numero"], r["ticket"], "Infraestructura", r["ubicacion"], r["actividad"],
+            r["numero"], r["ticket"], r.get("departamento", "Infraestructura"), r["ubicacion"], r["actividad"],
             r["estado"], len(r["evidencias"]), r["fecha"], r["hora"], r["actualizado"],
         ]
         for j, v in enumerate(valores, start=1):

@@ -4,20 +4,22 @@ Bot de Telegram para el registro de actividades en campo para minería en tiempo
 
 > 📄 **Documentación oficial del PRD:** Consulta el archivo [`PRD.md`](PRD.md) para revisar las especificaciones de la **Versión 1.1** del piloto.
 
-## 🚀 Características y Flujo Principal (PRD v1.1)
+## 🚀 Características y Flujo Principal
 
-1. **Flujo de Registro en 5 Pasos**:
-   - 🎫 **Ticket**: Número de ticket u orden de trabajo (obligatorio, texto libre).
-   - 📍 **Ubicación**: Selección por botones (`Nivel 10`, `Nivel 11`, `Nivel 12`, `Otra`).
+1. **Flujo de Registro en 7 Pasos**:
+   - 🎫 **Ticket**: Número de ticket u orden de trabajo (obligatorio, texto libre o `Sin ticket`).
+   - 🏢 **Departamento**: Selección dinámica por catálogo de Supabase (ej. `Infraestructura`, `Mantenimiento`).
+   - 📍 **Zona / Ubicación**: Selección dinámica (`Nivel 10`, `Nivel 11`, `Nivel 12`, `Otra`). Si se ingresa una nueva zona, se da de alta automáticamente.
    - 📝 **Actividad**: Descripción de la actividad realizada.
    - 📊 **Estado**: Estado final (`Terminado`, `Pendiente`, `No solucionado`).
-   - 📷 **Evidencia**: Carga opcional de una o varias fotos.
-2. **Confirmación Interactiva**: Resumen previo al guardado con opciones `✅ Guardar`, `✏️ Editar`, `❌ Cancelar`.
-3. **Gestión de Pendientes**: Consulta de reportes pendientes con opción de continuar anexando actualizaciones con marca de tiempo.
+   - 📷 **Evidencia**: Carga opcional de una o varias fotos (validadas como imágenes reales, máx 10 MB).
+   - 📋 **Confirmación Interactiva**: Resumen completo previo al guardado con opciones `✅ Guardar`, `✏️ Editar`, `❌ Cancelar`.
+2. **Gestión de Pendientes**: Consulta de reportes pendientes con opción de continuar anexando actualizaciones con marca de tiempo.
+3. **Gestión de Departamentos** (solo admin): comandos `/nuevo_departamento Nombre` y `/departamentos`.
 4. **Exportación a Excel** (solo admin): botón `📊 Exportar Excel` o `/reporte AAAA-MM-DD AAAA-MM-DD`. El archivo trae tres hojas:
-   - **Resumen**: datos del contrato, periodo y totales por estado, técnico y ubicación.
-   - **Reportes**: una fila por reporte, con filtros.
-   - **Evidencias**: una fila por foto, con su link.
+   - **Resumen**: datos del contrato, periodo y totales por estado, departamento y ubicación.
+   - **Reportes**: una fila por reporte con su departamento correspondiente y filtros.
+   - **Evidencias**: una fila por foto, con su link y miniaturas.
 5. **Generación Automática**: Número de reporte (`#001`, `#002`...), técnico (por sesión de Telegram), fecha y hora en zona horaria local (`America/Mexico_City`).
 
 ---
@@ -28,11 +30,11 @@ Bot de Telegram para el registro de actividades en campo para minería en tiempo
 1. En Telegram, busca **@BotFather** y envía el comando `/newbot`.
 2. Asigna un nombre (ej. `FieldTI Bot`) y un username (ej. `fieldti_qtek_bot`).
 3. Guarda el **Token de API** (`TELEGRAM_BOT_TOKEN`).
-4. Define un token secreto arbitrario para `TELEGRAM_WEBHOOK_SECRET` (muy recomendado: sin él, cualquiera puede mandar updates falsos al webhook).
+4. Define un token secreto arbitrario para `TELEGRAM_WEBHOOK_SECRET` (obligatorio: el webhook rechaza peticiones no autorizadas con 403).
 
 ### 2. Supabase (base de datos + fotos)
 1. Crea un proyecto en [supabase.com](https://supabase.com) (el plan gratuito alcanza para el piloto).
-2. **Base de datos:** en **SQL Editor > New query**, pega el contenido de [`supabase/schema.sql`](supabase/schema.sql) y pulsa **Run**. Crea las tablas `tecnicos` y `reportes`. Correrlo otra vez no borra nada.
+2. **Base de datos:** en **SQL Editor > New query**, pega el contenido de [`supabase/schema.sql`](supabase/schema.sql) (o corre [`supabase/migration_departamentos_zonas.sql`](supabase/migration_departamentos_zonas.sql) si tienes una base previa) y pulsa **Run**. Crea las tablas `tecnicos`, `departamentos`, `zonas` y `reportes`.
 3. **Fotos:** en **Storage > New bucket**, crea un bucket llamado `evidencias` y marca **Public bucket**.
 4. En **Project Settings > API** copia:
    - **Project URL** → `SUPABASE_URL`

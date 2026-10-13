@@ -136,7 +136,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         estado.borrador = {"evidencias": []}
         estado.esperando = "ticket"
         decir(
-            "🎫 *Paso 1 de 5 — Ticket*\n\n"
+            "🎫 *Paso 1 de 7 — Ticket*\n\n"
             "Ingresa el número de ticket u orden de trabajo (ej. TK-001254).\n"
             "Si no cuentas con ticket, pulsa *'Sin ticket'* o escribe *'Sin ticket'*:"
         )
@@ -182,7 +182,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
     if t_norm in ("ayuda", "comandos", "/help"):
         lineas = [
             "🤖 *Comandos de Reporte de Campo:*",
-            "• *➕ Nuevo reporte*: Inicia el registro de un nuevo reporte (5 pasos).",
+            "• *➕ Nuevo reporte*: Inicia el registro de un nuevo reporte (7 pasos).",
             "• *⏸️ Mis pendientes*: Muestra y permite continuar reportes pendientes.",
             "• *📋 Mis reportes*: Muestra tu historial de reportes.",
             "• *Cancelar*: Cancela el proceso actual.",
@@ -190,12 +190,14 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         if es_admin:
             lineas.append("\n👑 *Administrador:*")
             lineas.append("• *👤 + Nuevo técnico*: Genera código de activación para un técnico nuevo.")
+            lineas.append("• `/nuevo_departamento Nombre`: Registra un departamento nuevo.")
+            lineas.append("• `/departamentos`: Consulta los departamentos disponibles.")
             lineas.append("• *📊 Exportar Excel*: Reporte de la semana actual.")
             lineas.append("• `/reporte AAAA-MM-DD AAAA-MM-DD`: Reporte en Excel de otro periodo.")
         decir("\n".join(lineas))
         return respuestas
 
-    # --- MÁQUINA DE ESTADOS (FLUJO DE 5 PASOS PRD V1.1) ---
+    # --- MÁQUINA DE ESTADOS (FLUJO DE 7 PASOS) ---
 
     # Paso 1: Ticket
     if estado.esperando == "ticket":
@@ -211,7 +213,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             departamentos = db.listar_departamentos()
         except Exception:
             departamentos = ["Infraestructura"]
-        decir("🏢 *Paso 2 — Departamento*\n\nSelecciona el departamento:\n" + "\n".join(f"• {d}" for d in departamentos))
+        decir("🏢 *Paso 2 de 7 — Departamento*\n\nSelecciona el departamento:\n" + "\n".join(f"• {d}" for d in departamentos))
         return respuestas
 
     # Paso 2: Departamento
@@ -230,45 +232,53 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             zonas = db.listar_zonas()
         except Exception:
             zonas = CATALOGO_UBICACION
-        decir("📍 *Paso 3 — Zona*\n\nSelecciona la zona o escribe Otra:\n" + "\n".join(f"• {z}" for z in zonas))
+        decir("📍 *Paso 3 de 7 — Zona*\n\nSelecciona la zona o escribe Otra:\n" + "\n".join(f"• {z}" for z in zonas))
         return respuestas
 
-    # Paso 3: Ubicación
+    # Paso 3: Ubicación / Zona
     if estado.esperando == "ubicacion":
         if t_norm in ("otra", "otra ubicacion"):
             estado.esperando = "ubicacion_otra"
             decir("📍 Escribe la ubicación personalizada:")
             return respuestas
 
-        # Buscar coincidencia en catálogo
+        try:
+            zonas = db.listar_zonas()
+        except Exception:
+            zonas = CATALOGO_UBICACION
+
+        # Buscar coincidencia en catálogo dinámico de zonas
         ubicacion_sel = None
-        for u in CATALOGO_UBICACION:
-            if t_norm and (_remover_acentos(u) == t_norm or t_norm in _remover_acentos(u)):
-                ubicacion_sel = u
+        for z in zonas:
+            if t_norm and (_remover_acentos(z) == t_norm or t_norm in _remover_acentos(z)):
+                ubicacion_sel = z
                 break
         if not ubicacion_sel:
-            ubicacion_sel = texto_limpio
+            try:
+                ubicacion_sel = db.asegurar_zona(texto_limpio)
+            except Exception:
+                ubicacion_sel = texto_limpio
 
         estado.borrador["ubicacion"] = ubicacion_sel
         estado.esperando = "actividad"
-        decir("📝 *Paso 3 de 5 — Actividad*\n\nDescribe brevemente la actividad realizada:")
+        decir("📝 *Paso 4 de 7 — Actividad*\n\nDescribe brevemente la actividad realizada:")
         return respuestas
 
     if estado.esperando == "ubicacion_otra":
         estado.borrador["ubicacion"] = db.asegurar_zona(texto_limpio)
         estado.esperando = "actividad"
-        decir("📝 *Paso 3 de 5 — Actividad*\n\nDescribe brevemente la actividad realizada:")
+        decir("📝 *Paso 4 de 7 — Actividad*\n\nDescribe brevemente la actividad realizada:")
         return respuestas
 
-    # Paso 3: Actividad
+    # Paso 4: Actividad
     if estado.esperando == "actividad":
         estado.borrador["actividad"] = texto_limpio
         estado.esperando = "estado"
         opciones_estado = "\n".join([f"• {e}" for e in CATALOGO_ESTADO_REPORTE])
-        decir(f"📊 *Paso 4 de 5 — Estado*\n\nSelecciona el estado final del reporte:\n{opciones_estado}")
+        decir(f"📊 *Paso 5 de 7 — Estado*\n\nSelecciona el estado final del reporte:\n{opciones_estado}")
         return respuestas
 
-    # Paso 4: Estado
+    # Paso 5: Estado
     if estado.esperando == "estado":
         estado_norm = _normalizar_estado(texto_limpio)
         if estado_norm not in CATALOGO_ESTADO_REPORTE:
@@ -277,12 +287,12 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         estado.borrador["estado"] = estado_norm
         estado.esperando = "evidencia"
         decir(
-            "📷 *Paso 5 de 5 — Evidencia Fotográfica*\n\n"
+            "📷 *Paso 6 de 7 — Evidencia Fotográfica*\n\n"
             "Manda una o varias fotos de evidencia por el chat, o responde *'Omitir'* para continuar sin fotos."
         )
         return respuestas
 
-    # Paso 5: Evidencia fotográfica
+    # Paso 6: Evidencia fotográfica
     if estado.esperando == "evidencia":
         if t_norm in ("omitir", "continuar", "listo", "sin fotos", "no"):
             _mostrar_confirmacion(estado, decir)
@@ -292,18 +302,19 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             decir("Manda una foto por el chat o responde *'Omitir'* / *'Continuar'* para pasar a la confirmación.")
             return respuestas
 
-    # Paso 6: Confirmación previa a guardado
+    # Paso 7: Confirmación previa a guardado
     if estado.esperando == "confirmacion":
         if t_norm in ("guardar", "si", "confirmar", "ok"):
             try:
                 b = estado.borrador
+                depto = b.get("departamento", "Infraestructura")
                 numero_creado = db.crear_reporte(
                     ticket=b.get("ticket", "N/A"),
                     tecnico=tecnico,
                     ubicacion=b.get("ubicacion", "Nivel 10"),
                     actividad=b.get("actividad", ""),
                     estado=b.get("estado", "Terminado"),
-                    departamento=b.get("departamento", "Infraestructura"),
+                    departamento=depto,
                     evidencias=b.get("evidencias", []),
                 )
                 now = _ahora()
@@ -311,10 +322,10 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
                     f"✅ *Reporte guardado exitosamente*\n\n"
                     f"• *Número:* {numero_creado}\n"
                     f"• *Ticket:* {b.get('ticket')}\n"
+                    f"• *Departamento:* {depto}\n"
                     f"• *Ubicación:* {b.get('ubicacion')}\n"
                     f"• *Actividad:* {b.get('actividad')}\n"
                     f"• *Estado:* {b.get('estado')}\n"
-                    f"• *Departamento:* Infraestructura\n"
                     f"• *Fecha:* {now.strftime('%Y-%m-%d')}\n"
                     f"• *Hora:* {now.strftime('%H:%M:%S')}"
                 )
@@ -330,7 +341,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             estado.esperando = "ticket"
             decir(
                 "✏️ Reiniciando el reporte.\n\n"
-                "🎫 *Paso 1 de 5 — Ticket*\n\n"
+                "🎫 *Paso 1 de 7 — Ticket*\n\n"
                 "Ingresa el número de ticket (o pulsa *'Sin ticket'* si no tienes):"
             )
             return respuestas
@@ -414,8 +425,9 @@ def _mostrar_confirmacion(estado, decir):
 
     estado.esperando = "confirmacion"
     resumen = (
-        f"📋 *Confirmación del Reporte*\n\n"
+        f"📋 *Confirmación del Reporte (Paso 7 de 7)*\n\n"
         f"• *Ticket:* {b.get('ticket', 'N/A')}\n"
+        f"• *Departamento:* {b.get('departamento', 'Infraestructura')}\n"
         f"• *Ubicación:* {b.get('ubicacion', 'N/A')}\n"
         f"• *Actividad:* {b.get('actividad', 'N/A')}\n"
         f"• *Estado:* {b.get('estado', 'Terminado')}\n"

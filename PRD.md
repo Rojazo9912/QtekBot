@@ -1,64 +1,66 @@
 # PRD — Reporte de Campo Ágil para Mina
 
-**Versión:** 1.1 — actualizado tras el piloto implementado  
-**Estado:** Piloto funcional en Telegram, pendiente de aprobación para producción  
+**Versión:** 1.2 — actualizado con departamentos, zonas dinámicas y endurecimiento de seguridad  
+**Estado:** Piloto funcional en Telegram, probado con Supabase y exportación Excel  
 **Canal:** Telegram Bot  
-
-*Este documento actualiza la v1.0 con lo que realmente se construyó y probó. Los cambios respecto al documento original están marcados explícitamente — no se ocultó ningún ajuste de alcance.*
 
 ---
 
-## 0. Resumen de cambios frente al PRD v1.0
+## 0. Resumen de evolución del producto
 
-La decisión más importante: se mantuvo la pila tecnológica de un piloto anterior (Python + FastAPI + Google Sheets + Google Drive + Railway) en vez de migrar a la pila originalmente especificada (Node.js/TypeScript + Supabase PostgreSQL + Supabase Storage). El FLUJO de conversación del PRD v1.0 se implementó completo; la infraestructura de datos es distinta.
-
-| Aspecto | PRD v1.0 (pedido) | Implementado |
+| Aspecto | PRD v1.0 / v1.1 | Implementado v1.2 |
 |---|---|---|
-| **Backend** | Node.js + TypeScript | Python + FastAPI |
-| **Base de datos** | PostgreSQL (Supabase) | Google Sheets |
-| **Archivos/evidencias** | Supabase Storage | Google Drive |
-| **Flujo de conversación** | Botones, ticket obligatorio, ubicación fija, confirmación | Igual — implementado completo |
-| **Auth / roles** | TECHNICIAN / SUPERVISOR / ADMIN | No implementado |
-| **Resiliencia offline** | Reintentos + idempotencia | Parcial — ver sección 15 |
-| **Dashboard** | Web dedicada (React/Next.js) | El propio Google Sheet |
+| **Backend** | Python + FastAPI | Python + FastAPI |
+| **Base de datos** | PostgreSQL (Supabase) | PostgreSQL (Supabase) con catálogos dinámicos (`departamentos`, `zonas`, `reportes`) |
+| **Archivos/evidencias** | Supabase Storage | Supabase Storage (validación estricta de imágenes, máx 10 MB) |
+| **Flujo de conversación** | 5 pasos (Ticket, Ubicación, Actividad, Estado, Foto) | 7 pasos (Ticket, Departamento, Zona, Actividad, Estado, Evidencia, Confirmación) |
+| **Catálogos dinámicos** | Ubicaciones fijas | Departamentos y zonas dinámicos en Supabase con auto-registro de zonas ("Otra") |
+| **Comandos Admin** | `/nuevo_tecnico`, `/reporte` | `/nuevo_tecnico`, `/nuevo_departamento`, `/departamentos`, `/reporte` |
+| **Reportes y Exportación**| Excel estático | Excel dinámico agrupado por departamento y ubicación |
 
 ---
 
 ## 1. Objetivo
 
-El sistema debe permitir que un técnico registre una actividad en pocos pasos. Sin cambios respecto al v1.0.
+El sistema permite que un técnico registre una actividad en campo de forma guiada e interactiva.
 
-El reporte solamente solicita:
+El reporte solicita secuencialmente:
 1. Ticket
-2. Ubicación
-3. Actividad realizada
-4. Estado
-5. Foto opcional
+2. Departamento
+3. Zona / Ubicación
+4. Actividad realizada
+5. Estado final
+6. Foto(s) de evidencia opcional(es)
+7. Confirmación final antes del guardado
 
-El sistema obtiene automáticamente: Técnico, Fecha, Hora, Número de reporte.
-
-**✔ Cumplido tal cual se pidió**
+El sistema obtiene automáticamente: Técnico, Fecha, Hora, Número de reporte (`#001`, `#002`...).
 
 ---
 
-## 2. Flujo principal (implementado)
+## 2. Flujo principal (implementado en 7 pasos)
 
 ### Paso 1 — Ticket
-🎫 **Ingresa el número de ticket:** Texto libre (ej. `TK-001254`) o botón **Sin ticket** (si no se cuenta con ticket, genera automáticamente un folio temporal con fecha y hora `S/T-AAMMDD-HHMMSS`).
+🎫 **Ingresa el número de ticket:** Texto libre (ej. `TK-001254`) o botón **Sin ticket** (genera folio temporal `S/T-AAMMDD-HHMMSS`).
 
-### Paso 2 — Ubicación
-📍 **Lista fija por botones:** Nivel 10 / Nivel 11 / Nivel 12 / Otra. Configurable editando una lista en el código (no requiere base de datos aparte).
+### Paso 2 — Departamento
+🏢 **Selección por lista/botones:** Departamentos dinámicos de Supabase (ej. `Infraestructura`, `Mantenimiento`). Administrable vía `/nuevo_departamento` y `/departamentos`.
 
-### Paso 3 — Actividad
-📝 **Texto libre**, sin campos adicionales, tal como especifica el v1.0.
+### Paso 3 — Zona / Ubicación
+📍 **Selección dinámica:** Zonas de Supabase (ej. `Nivel 10`, `Nivel 11`, `Nivel 12`) o **Otra**. Al teclear una zona nueva o elegir Otra, se persiste automáticamente en el catálogo para futuros reportes.
 
-### Paso 4 — Estado
+### Paso 4 — Actividad
+📝 **Texto libre**, descripción breve del trabajo realizado.
+
+### Paso 5 — Estado
 📊 **Tres botones:** ✅ Terminado / ⏸️ Pendiente / ❌ No solucionado.
 
-### Paso 5 — Evidencia
-📷 **Opcional, por botón** (Agregar foto / Omitir). Permite varias fotos antes de continuar, con confirmación 'Otra foto / Continuar' entre cada una — este sub-paso no estaba detallado en el v1.0 y se añadió para permitir más de una foto sin ambigüedad.
+### Paso 6 — Evidencia
+📷 **Opcional, por botón** (Agregar foto / Omitir). Valida que sea imagen real y que no supere 10 MB. Permite varias fotos antes de continuar.
 
-**✔ Los 5 pasos están implementados y probados de punta a punta**
+### Paso 7 — Confirmación
+📋 **Resumen previo al guardado:** Muestra Ticket, Departamento, Ubicación, Actividad, Estado y conteo de evidencias, con opciones `✅ Guardar`, `✏️ Editar`, `❌ Cancelar`.
+
+**✔ Los 7 pasos están implementados y probados de punta a punta**
 
 ---
 
