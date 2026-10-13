@@ -644,11 +644,11 @@ class TestComandoReporteTelegram(unittest.TestCase):
 
     @patch("app.main._tecnico_de", return_value="Miguel Abraham Lopez Ortiz")
     @patch("app.db.listar_departamentos", return_value=["Infraestructura", "Mantenimiento"])
-    @patch("app.telegram_client.send_text")
-    def test_admin_lista_departamentos(self, mock_texto, mock_db, _tec):
+    @patch("app.telegram_client.send_opciones")
+    def test_admin_lista_departamentos(self, mock_opciones, mock_db, _tec):
         self._mandar("/departamentos")
         mock_db.assert_called_once()
-        self.assertIn("Mantenimiento", mock_texto.call_args[0][1])
+        self.assertIn("Mantenimiento", mock_opciones.call_args[0][1])
 
 
 if __name__ == "__main__":

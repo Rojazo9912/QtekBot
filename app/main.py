@@ -334,10 +334,10 @@ def _manejar_mensaje(message: dict):
     if comando == "/nuevo_tecnico":
         _admin_nuevo_tecnico(chat_id, tecnico, texto)
         return
-    if comando == "/nuevo_departamento":
+    if comando in ("/nuevo_departamento", "/nuevodepartamento"):
         _admin_nuevo_departamento(chat_id, tecnico, texto)
         return
-    if comando == "/departamentos":
+    if comando in ("/departamentos", "/departamento") or bot_logic._remover_acentos(texto) in ("departamentos", "departamento", "ver departamentos"):
         _admin_listar_departamentos(chat_id, tecnico)
         return
     if comando == "/reporte" or bot_logic._remover_acentos(texto) == "exportar excel":
@@ -457,9 +457,10 @@ def _admin_nuevo_departamento(chat_id: int, tecnico: str, texto: str):
     if tecnico not in ADMIN_TECNICOS:
         tg.send_text(chat_id, "No tienes permiso para crear departamentos.", con_teclado=False)
         return
-    nombre = texto.removeprefix("/nuevo_departamento").strip()
+    nombre = texto.removeprefix("/nuevo_departamento").removeprefix("/nuevodepartamento").strip()
     if not nombre:
-        tg.send_text(chat_id, "Usa: /nuevo_departamento Nombre", con_teclado=False)
+        get_estado(tecnico).esperando = "admin_nombre_departamento"
+        tg.send_opciones(chat_id, "🏢 Escribe el nombre del nuevo departamento que deseas registrar (o Cancelar):", ["❌ Cancelar"])
         return
     try:
         creado = db.agregar_departamento(nombre)
@@ -467,7 +468,7 @@ def _admin_nuevo_departamento(chat_id: int, tecnico: str, texto: str):
         print(f"[nuevo_departamento] error: {e}")
         tg.send_text(chat_id, "No pude crear el departamento. Intenta más tarde.", es_admin=True)
         return
-    tg.send_text(chat_id, (f"✅ Departamento creado: {nombre}" if creado else f"El departamento {nombre} ya existe."), es_admin=True)
+    tg.send_text(chat_id, (f"✅ Departamento creado: *{nombre}*" if creado else f"El departamento *{nombre}* ya existe o es inválido."), es_admin=True)
 
 
 def _admin_listar_departamentos(chat_id: int, tecnico: str):
@@ -480,5 +481,5 @@ def _admin_listar_departamentos(chat_id: int, tecnico: str):
         print(f"[departamentos] error: {e}")
         tg.send_text(chat_id, "No pude consultar los departamentos.", es_admin=True)
         return
-    texto = "🏢 Departamentos disponibles:\n\n" + ("\n".join(f"{i}. {n}" for i, n in enumerate(nombres, 1)) or "No hay departamentos registrados.")
-    tg.send_text(chat_id, texto, es_admin=True)
+    texto = "🏢 *Departamentos disponibles:*\n\n" + ("\n".join(f"{i}. {n}" for i, n in enumerate(nombres, 1)) or "No hay departamentos registrados.")
+    tg.send_opciones(chat_id, texto, ["➕ Nuevo departamento", "➕ Nuevo reporte", "❌ Cancelar"])

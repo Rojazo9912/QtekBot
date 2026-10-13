@@ -130,6 +130,22 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             estado.esperando = None
         return respuestas
 
+    # Flujo de Admin: Alta de nuevo departamento
+    if estado.esperando == "admin_nombre_departamento":
+        nombre_nuevo = texto_limpio
+        try:
+            creado = db.agregar_departamento(nombre_nuevo)
+            estado.esperando = None
+            if creado:
+                decir(f"✅ Departamento creado: *{nombre_nuevo}*.")
+            else:
+                decir(f"El departamento *{nombre_nuevo}* ya existe o es inválido.")
+        except Exception as e:
+            print(f"[admin] error registrando departamento: {e}")
+            decir("❌ No pude registrar el departamento por un error con la base de datos.")
+            estado.esperando = None
+        return respuestas
+
     # --- NAVEGACIÓN DEL MENÚ PRINCIPAL ---
     if t_norm in ("nuevo reporte", "+ nuevo reporte", "/nuevo_reporte", "nueva actividad", "+ nueva actividad", "/start"):
         # Reiniciar borrador y comenzar Paso 1 (Ticket)
@@ -177,6 +193,27 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             return respuestas
         estado.esperando = "admin_nombre_tecnico"
         decir("👤 Escribe el Nombre Completo del nuevo técnico que deseas registrar:")
+        return respuestas
+
+    if t_norm in ("departamentos", "departamento", "/departamentos", "/departamento", "ver departamentos"):
+        if not es_admin:
+            decir("No tienes permisos de administrador para consultar departamentos.")
+            return respuestas
+        try:
+            nombres = db.listar_departamentos()
+            lista = "\n".join(f"{i}. {n}" for i, n in enumerate(nombres, 1)) or "No hay departamentos registrados."
+            decir(f"🏢 *Departamentos disponibles:*\n\n{lista}")
+        except Exception as e:
+            print(f"[departamentos] error: {e}")
+            decir("❌ No pude consultar los departamentos.")
+        return respuestas
+
+    if t_norm in ("nuevo departamento", "+ nuevo departamento", "/nuevo_departamento"):
+        if not es_admin:
+            decir("No tienes permisos de administrador para agregar departamentos.")
+            return respuestas
+        estado.esperando = "admin_nombre_departamento"
+        decir("🏢 Escribe el nombre del nuevo departamento que deseas registrar (o Cancelar):")
         return respuestas
 
     if t_norm in ("ayuda", "comandos", "/help"):
