@@ -365,8 +365,12 @@ def _manejar_mensaje(message: dict):
 def _manejar_start(chat_id: int, texto: str):
     tecnico_existente = _tecnico_de(chat_id)
     if tecnico_existente:
+        estado = get_estado(tecnico_existente)
+        estado.esperando = None
+        estado.borrador = {}
+        estado.folio_activo = None
         es_admin = tecnico_existente in ADMIN_TECNICOS
-        tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Usa los botones o escribe libremente.", es_admin=es_admin)
+        tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Conversación reiniciada. Usa los botones o escribe libremente.", es_admin=es_admin)
         return
 
     partes = texto.split(maxsplit=1)
