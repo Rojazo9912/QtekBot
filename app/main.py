@@ -1,11 +1,12 @@
 """
 Piloto FieldTI AI — Bot de Telegram + Web App para registro de actividades.
 Los datos viven en Supabase Postgres (app/db.py) y el admin descarga el
-reporte en Excel (app/excel.py).
+reporte en Excel (app/excel.py) y fotos en ZIP (app/zip_export.py).
 
 Punto de entrada principal para Railway y desarrollo local.
 Comando de inicio: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 """
+import asyncio
 import datetime as dt
 import hmac
 import io
@@ -22,6 +23,9 @@ from app import db, excel, storage, bot_logic
 from app.bot_logic import procesar_mensaje_web
 from app.state import get_estado
 from app.config import ADMIN_TECNICOS, CATALOGO_UBICACION, CATALOGO_ESTADO_REPORTE, ZONA_HORARIA
+from app.watermark import aplicar_marca_de_agua
+from app.zip_export import generar_zip_evidencias
+
 app = FastAPI(title="FieldTI AI - Telegram Bot")
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -37,6 +41,7 @@ REPORTE_ADMIN_SECRET = os.environ.get("REPORTE_ADMIN_SECRET")
 WEBAPP_HABILITADA = os.environ.get("WEBAPP_HABILITADA", "").strip().lower() in ("1", "true", "si", "yes")
 
 MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MIME_ZIP = "application/zip"
 
 if not WEBHOOK_SECRET:
     print("[telegram] AVISO: TELEGRAM_WEBHOOK_SECRET no está configurado; "
@@ -44,8 +49,7 @@ if not WEBHOOK_SECRET:
 
 
 def _secreto_valido(recibido: str | None, esperado: str | None) -> bool:
-    """Compara en tiempo constante. Sin secreto configurado, rechaza (falla
-    en cerrado)."""
+    """Compara en tiempo constante. Sin secreto configurado, rechaza (falla en cerrado)."""
     if not esperado or not recibido:
         return False
     return hmac.compare_digest(recibido.encode(), esperado.encode())
@@ -88,6 +92,9 @@ CATALOGOS_POR_ESTADO = {
     "estado": CATALOGO_ESTADO_REPORTE,
     "evidencia": ["Omitir"],
     "confirmacion": ["✅ Guardar", "✏️ Editar", "❌ Cancelar"],
+    "editar_campo_seleccion": ["🎫 Ticket", "🏢 Departamento", "📍 Zona", "📝 Actividad", "📊 Estado", "📷 Fotos", "🔄 Reiniciar todo", "↩️ Volver"],
+    "editar_fotos": ["🗑️ Borrar fotos", "➕ Agregar fotos", "↩️ Volver"],
+    "editar_estado": CATALOGO_ESTADO_REPORTE,
     "continuar_pendiente_estado": CATALOGO_ESTADO_REPORTE,
 }
 
@@ -95,12 +102,12 @@ CATALOGOS_POR_ESTADO = {
 def _obtener_opciones(esperando: str | None) -> list[str]:
     if not esperando:
         return []
-    if esperando == "departamento":
+    if esperando in ("departamento", "editar_departamento"):
         try:
             return db.listar_departamentos()
         except Exception:
             return ["Infraestructura"]
-    if esperando == "ubicacion":
+    if esperando in ("ubicacion", "editar_zona"):
         try:
             return db.listar_zonas() + ["Otra"]
         except Exception:
@@ -165,15 +172,36 @@ def exportar_excel(request: Request, desde: str = "", hasta: str = ""):
     )
 
 
+@app.get("/api/exportar-fotos")
+def exportar_fotos(request: Request, desde: str = "", hasta: str = ""):
+    """Descarga un archivo ZIP con las fotos de evidencias del periodo.
+    Protegido con REPORTE_ADMIN_SECRET."""
+    if not _admin_autorizado(request, ""):
+        return JSONResponse(**_PROHIBIDO)
+    try:
+        inicio, fin = _periodo(desde, hasta)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detalle": "Fechas inválidas. Usa desde=YYYY-MM-DD&hasta=YYYY-MM-DD."},
+        )
+    try:
+        reportes = db.reportes_en_periodo(inicio, fin)
+        contenido, nombre = generar_zip_evidencias(reportes, inicio, fin)
+    except Exception as e:
+        print(f"[exportar-fotos] error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detalle": str(e)})
+    return Response(
+        content=contenido,
+        media_type=MIME_ZIP,
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+
 @app.get("/api/codigo-activacion")
 def obtener_codigo_activacion(request: Request, nombre: str = ""):
     """Recupera el código de activación de un técnico que todavía no vinculó
-    ningún chat de Telegram. Solo hace falta para el/los técnico(s) semilla
-    de config.TECNICOS: como nadie les ha escrito al bot todavía, /nuevo_tecnico
-    no puede mandárselo por chat (no existe ese chat). Para cualquier técnico
-    agregado después con /nuevo_tecnico, el código ya sale directo en la
-    respuesta de ese comando — este endpoint no hace falta. Protegido con
-    REPORTE_ADMIN_SECRET."""
+    ningún chat de Telegram."""
     if not _admin_autorizado(request, ""):
         return JSONResponse(**_PROHIBIDO)
     try:
@@ -209,7 +237,7 @@ def chat(mensaje: MensajeIn):
     respuestas = procesar_mensaje_web(mensaje.tecnico, mensaje.texto)
     estado = get_estado(mensaje.tecnico)
     opciones = _obtener_opciones(estado.esperando)
-    es_admin = mensaje.tecnico in ADMIN_TECNICOS
+    es_admin = db.es_admin(mensaje.tecnico)
     return {
         "respuestas": respuestas,
         "opciones": opciones,
@@ -234,19 +262,21 @@ async def telegram_webhook(request: Request):
     if "message" in update:
         message = update["message"]
         if "photo" in message or "document" in message:
-            _manejar_foto(message)
+            # Procesar foto en hilo separado para no bloquear el bucle de eventos
+            await asyncio.to_thread(_manejar_foto, message)
         else:
-            _manejar_mensaje(message)
+            await asyncio.to_thread(_manejar_mensaje, message)
         return {"status": "ok"}
 
     return {"status": "ignored"}
 
 
 def _manejar_foto(message: dict):
-    """Descarga la foto de Telegram, la sube a Supabase Storage y la anexa al borrador de evidencias."""
+    """Descarga la foto de Telegram, le aplica marca de agua automática,
+    la sube a Supabase Storage y la anexa al borrador de evidencias."""
     chat_id = message["chat"]["id"]
     tecnico = _tecnico_de(chat_id)
-    es_admin = tecnico in ADMIN_TECNICOS if tecnico else False
+    es_admin = db.es_admin(tecnico) if tecnico else False
     if not tecnico:
         tg.send_text(chat_id, "Primero manda /start <código> para identificarte.", con_teclado=False)
         return
@@ -256,7 +286,7 @@ def _manejar_foto(message: dict):
         tg.send_text(chat_id, "Para registrar un nuevo reporte pulsa '➕ Nuevo reporte'.", es_admin=es_admin)
         return
 
-    tg.send_text(chat_id, "Subiendo foto de evidencia…", con_teclado=False)
+    tg.send_text(chat_id, "Subiendo foto y aplicando marca de agua…", con_teclado=False)
     try:
         if "photo" in message:
             file_id = message["photo"][-1]["file_id"]
@@ -285,9 +315,22 @@ def _manejar_foto(message: dict):
         except Exception:
             tg.send_text(chat_id, "El archivo no es una imagen válida.", es_admin=es_admin)
             return
+
+        # Aplicar marca de agua con datos del reporte
+        try:
+            contenido_procesado = aplicar_marca_de_agua(
+                contenido,
+                ticket=estado.borrador.get("ticket"),
+                tecnico=tecnico,
+                zona=estado.borrador.get("ubicacion"),
+            )
+        except Exception as err_wm:
+            print(f"[evidencia] advertencia aplicando marca de agua: {err_wm}")
+            contenido_procesado = contenido
+
         nombre_archivo = f"evidencia_{tecnico.replace(' ', '_')}_{file_path.split('/')[-1]}"
 
-        url = storage.upload_evidence(contenido, nombre_archivo, mime_type=mime_type)
+        url = storage.upload_evidence(contenido_procesado, nombre_archivo, mime_type=mime_type)
         msg_resp = bot_logic.registrar_evidencia_foto(tecnico, url)
         tg.send_opciones(chat_id, msg_resp, ["Omitir", "Continuar"])
     except Exception as e:
@@ -296,9 +339,7 @@ def _manejar_foto(message: dict):
 
 
 def _tecnico_de(chat_id: int) -> str | None:
-    """Técnico identificado en este chat. SESIONES es solo una caché en
-    memoria (se pierde si el bot se reinicia); la fuente de verdad durable
-    es el chat_id vinculado en la tabla `tecnicos` (ver db.tecnico_por_chat_id)."""
+    """Técnico identificado en este chat."""
     tecnico = SESIONES.get(chat_id)
     if tecnico:
         return tecnico
@@ -329,7 +370,7 @@ def _manejar_mensaje(message: dict):
         tg.send_text(chat_id, "Primero manda /start <código> para identificarte.", con_teclado=False)
         return
 
-    es_admin = tecnico in ADMIN_TECNICOS
+    es_admin = db.es_admin(tecnico)
 
     if comando == "/nuevo_tecnico":
         _admin_nuevo_tecnico(chat_id, tecnico, texto)
@@ -342,6 +383,9 @@ def _manejar_mensaje(message: dict):
         return
     if comando == "/reporte" or bot_logic._remover_acentos(texto) == "exportar excel":
         _admin_exportar_excel(chat_id, tecnico, texto)
+        return
+    if comando == "/fotos" or bot_logic._remover_acentos(texto) == "descargar fotos":
+        _admin_exportar_fotos(chat_id, tecnico, texto)
         return
 
     texto_normalizado = tg.normalizar_texto_boton(texto)
@@ -369,7 +413,7 @@ def _manejar_start(chat_id: int, texto: str):
         estado.esperando = None
         estado.borrador = {}
         estado.folio_activo = None
-        es_admin = tecnico_existente in ADMIN_TECNICOS
+        es_admin = db.es_admin(tecnico_existente)
         tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Conversación reiniciada. Usa los botones o escribe libremente.", es_admin=es_admin)
         return
 
@@ -395,12 +439,12 @@ def _manejar_start(chat_id: int, texto: str):
         return
 
     SESIONES[chat_id] = nombre
-    es_admin = nombre in ADMIN_TECNICOS
+    es_admin = db.es_admin(nombre)
     tg.send_text(chat_id, f"Hola, {nombre.split(' ')[0]}. Tu cuenta quedó activada. Usa los botones o escribe libremente.", es_admin=es_admin)
 
 
 def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
-    if tecnico not in ADMIN_TECNICOS:
+    if not db.es_admin(tecnico):
         tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
         return
     nombre = texto.removeprefix("/nuevo_tecnico").strip()
@@ -427,9 +471,8 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
 
 
 def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):
-    """/reporte → semana actual; /reporte AAAA-MM-DD AAAA-MM-DD → ese periodo.
-    El botón '📊 Exportar Excel' equivale a /reporte sin fechas."""
-    if tecnico not in ADMIN_TECNICOS:
+    """/reporte → semana actual; /reporte AAAA-MM-DD AAAA-MM-DD → ese periodo."""
+    if not db.es_admin(tecnico):
         tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
         return
     partes = texto.split()[1:] if texto.split()[0].lower() == "/reporte" else []
@@ -457,8 +500,38 @@ def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):
     )
 
 
+def _admin_exportar_fotos(chat_id: int, tecnico: str, texto: str):
+    """/fotos → semana actual; /fotos AAAA-MM-DD AAAA-MM-DD → ese periodo en archivo ZIP."""
+    if not db.es_admin(tecnico):
+        tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
+        return
+    partes = texto.split()[1:] if texto.split()[0].lower() == "/fotos" else []
+    try:
+        if len(partes) not in (0, 2):
+            raise ValueError
+        inicio, fin = _periodo(*partes)
+    except ValueError:
+        tg.send_text(chat_id, "Usa: /fotos  o  /fotos AAAA-MM-DD AAAA-MM-DD", es_admin=True)
+        return
+
+    tg.send_text(chat_id, f"Comprimiendo evidencias fotográficas del {inicio.isoformat()} al {fin.isoformat()}…", con_teclado=False)
+    try:
+        reportes = db.reportes_en_periodo(inicio, fin)
+        contenido, nombre = generar_zip_evidencias(reportes, inicio, fin)
+    except Exception as e:
+        print(f"[exportar_fotos] error: {e}")
+        tg.send_text(chat_id, "No pude empaquetar las evidencias en ZIP. Intenta más tarde.", es_admin=True)
+        return
+    tg.send_document(
+        chat_id, contenido, nombre,
+        caption=f"📷 Evidencias fotográficas del {inicio.isoformat()} al {fin.isoformat()}.\n"
+                f"Otro periodo: /fotos AAAA-MM-DD AAAA-MM-DD",
+        mime_type=MIME_ZIP,
+    )
+
+
 def _admin_nuevo_departamento(chat_id: int, tecnico: str, texto: str):
-    if tecnico not in ADMIN_TECNICOS:
+    if not db.es_admin(tecnico):
         tg.send_text(chat_id, "No tienes permiso para crear departamentos.", con_teclado=False)
         return
     nombre = texto.removeprefix("/nuevo_departamento").removeprefix("/nuevodepartamento").strip()
@@ -476,7 +549,7 @@ def _admin_nuevo_departamento(chat_id: int, tecnico: str, texto: str):
 
 
 def _admin_listar_departamentos(chat_id: int, tecnico: str):
-    if tecnico not in ADMIN_TECNICOS:
+    if not db.es_admin(tecnico):
         tg.send_text(chat_id, "No tienes permiso para consultar departamentos.", con_teclado=False)
         return
     try:

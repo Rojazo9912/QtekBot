@@ -332,8 +332,17 @@ class TestBotonesConEmoji(unittest.TestCase):
         estado = get_estado("TecnicoEstandar")
         estado.esperando = "confirmacion"
         estado.borrador = {"ticket": "TK-1", "evidencias": []}
-        procesar_mensaje_web("TecnicoEstandar", "✏️ Editar")
-        self.assertEqual(estado.esperando, "ticket")
+        resp = procesar_mensaje_web("TecnicoEstandar", "✏️ Editar")
+        self.assertEqual(estado.esperando, "editar_campo_seleccion")
+        self.assertIn("corregir", resp[0].lower())
+
+        # Probar selección de ticket y modificación
+        resp_sel = procesar_mensaje_web("TecnicoEstandar", "Ticket")
+        self.assertEqual(estado.esperando, "editar_ticket")
+
+        resp_mod = procesar_mensaje_web("TecnicoEstandar", "TK-NUEVO-99")
+        self.assertEqual(estado.esperando, "confirmacion")
+        self.assertEqual(estado.borrador["ticket"], "TK-NUEVO-99")
 
     def test_ubicacion_solo_emoji_no_elige_nivel_10(self):
         estado = get_estado("TecnicoEstandar")
@@ -649,6 +658,69 @@ class TestComandoReporteTelegram(unittest.TestCase):
         self._mandar("/departamentos")
         mock_db.assert_called_once()
         self.assertIn("Mantenimiento", mock_opciones.call_args[0][1])
+
+    def test_one_shot_registro_rapido(self):
+        estado = get_estado("TecnicoEstandar")
+        with patch("app.db.asegurar_zona", return_value="Nivel 10"):
+            resp = procesar_mensaje_web(
+                "TecnicoEstandar",
+                "/registro TK-999 | Infraestructura | Nivel 10 | Cambio de patchcord | Terminado",
+            )
+        self.assertEqual(estado.esperando, "confirmacion")
+        self.assertEqual(estado.borrador["ticket"], "TK-999")
+        self.assertEqual(estado.borrador["departamento"], "Infraestructura")
+        self.assertEqual(estado.borrador["ubicacion"], "Nivel 10")
+        self.assertEqual(estado.borrador["actividad"], "Cambio de patchcord")
+        self.assertEqual(estado.borrador["estado"], "Terminado")
+        self.assertIn("confirmación", resp[0].lower())
+
+    @patch("app.db.buscar_reporte")
+    def test_comando_buscar_reporte(self, mock_buscar):
+        mock_buscar.return_value = [{
+            "numero": "#001",
+            "ticket": "TK-100",
+            "departamento": "Infraestructura",
+            "ubicacion": "Nivel 10",
+            "actividad": "Reparación",
+            "estado": "Terminado",
+            "tecnico": "Miguel",
+            "fecha": "2026-10-14",
+            "evidencias": [],
+        }]
+        resp = procesar_mensaje_web("TecnicoEstandar", "/buscar TK-100")
+        mock_buscar.assert_called_once_with("TK-100")
+        self.assertIn("TK-100", resp[0])
+        self.assertIn("#001", resp[0])
+
+    @patch("app.db.listar_reportes_por_zona")
+    def test_comando_zona_reportes(self, mock_zona):
+        mock_zona.return_value = [{
+            "numero": "#002",
+            "ticket": "TK-200",
+            "actividad": "Revisión Leaky Feeder",
+            "estado": "Pendiente",
+            "fecha": "2026-10-14",
+        }]
+        resp = procesar_mensaje_web("TecnicoEstandar", "/zona Nivel 10")
+        mock_zona.assert_called_once_with("Nivel 10")
+        self.assertIn("Nivel 10", resp[0])
+        self.assertIn("#002", resp[0])
+
+    def test_marca_de_agua_procesamiento(self):
+        from app.watermark import aplicar_marca_de_agua
+        from PIL import Image
+        img = Image.new("RGB", (300, 200), color="red")
+        b = io.BytesIO()
+        img.save(b, "JPEG")
+        resultado = aplicar_marca_de_agua(b.getvalue(), ticket="TK-123", tecnico="Juan", zona="Nivel 11")
+        self.assertIsInstance(resultado, bytes)
+        self.assertGreater(len(resultado), 0)
+
+    def test_generar_zip_evidencias(self):
+        from app.zip_export import generar_zip_evidencias
+        zip_bytes, nombre = generar_zip_evidencias([], dt.date.today(), dt.date.today())
+        self.assertTrue(nombre.endswith(".zip"))
+        self.assertGreater(len(zip_bytes), 0)
 
 
 if __name__ == "__main__":

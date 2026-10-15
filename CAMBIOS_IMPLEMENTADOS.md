@@ -1,8 +1,23 @@
 # Cambios implementados en QtekBot
 
-## Resumen
+## Versión 2.0 — Mejoras de Producción y Operación en Mina
 
-Se actualizó QtekBot para trabajar con departamentos y zonas dinámicas, además de reforzar la seguridad de evidencias y endpoints administrativos.
+1. **Edición Granular en Confirmación**: Al pulsar `✏️ Editar`, el bot ya no borra el reporte; permite seleccionar exactamente qué campo corregir (`Ticket`, `Departamento`, `Zona`, `Actividad`, `Estado`, `Fotos`, `Reiniciar todo` o `Volver`).
+2. **Modo One-Shot (Registro Rápido en 1 solo mensaje)**: Comando `/registro <Ticket> | <Departamento> | <Zona> | <Actividad> | <Estado>`. Ideal para zonas con cobertura intermitente en interior de mina.
+3. **Marca de Agua Automática en Evidencias**: Las fotos subidas a Telegram se estampan con franja inferior que detalla: `Ticket | Zona | Técnico | Fecha y Hora local`.
+4. **Búsqueda y Consulta**:
+   - `/buscar <ticket o folio>`: Muestra el estado, datos completos y enlaces de fotos.
+   - `/zona <nombre>`: Muestra reportes recientes registrados en dicha ubicación.
+5. **Exportación de Evidencias en ZIP**:
+   - Comando `/fotos [desde] [hasta]` para administradores en Telegram.
+   - Endpoint protegido `GET /api/exportar-fotos?desde=...&hasta=...`.
+6. **Administradores Dinámicos**: Soporte para la columna `es_admin` en la tabla `tecnicos` de Supabase (con fallback retrocompatible a `config.py`).
+7. **Persistencia de Sesión Conversacional**: Las sesiones y borradores activos se respaldan en Supabase (tabla `sesiones_estado`), sobreviviendo a reinicios o despliegues del contenedor.
+8. **Procesamiento Asíncrono No Bloqueante**: Desacople de operaciones pesadas I/O (descargas, marcas de agua, compresión) en `asyncio.to_thread` dentro de FastAPI.
+
+---
+
+## Versión 1.1 — Departamentos y Zonas Dinámicas
 
 ## Departamentos
 

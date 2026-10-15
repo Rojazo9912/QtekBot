@@ -12,7 +12,7 @@ import secrets
 import string
 from typing import Optional
 
-from app.config import TECNICOS, TECNICOS_INFO, ZONA_HORARIA
+from app.config import TECNICOS, TECNICOS_INFO, ADMIN_TECNICOS, ZONA_HORARIA
 from app.supabase_client import get_client
 
 _ALFABETO_CODIGO = string.ascii_uppercase + string.digits
@@ -281,3 +281,129 @@ def asegurar_zona(nombre: str) -> str:
         return existente.data[0]["nombre"]
     res = get_client().table("zonas").insert({"nombre": nombre}).execute()
     return res.data[0]["nombre"]
+
+
+# --- Administradores Dinámicos ---
+
+def es_admin(tecnico: str) -> bool:
+    """Verifica si un técnico tiene privilegios de administrador.
+    Revisa la configuración estática ADMIN_TECNICOS y la columna es_admin en Supabase."""
+    if not tecnico:
+        return False
+    if tecnico in ADMIN_TECNICOS:
+        return True
+    try:
+        res = _tabla_tecnicos().select("es_admin").eq("nombre", tecnico).limit(1).execute()
+        if res.data and res.data[0].get("es_admin"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def asignar_admin(nombre: str, es_admin: bool = True) -> bool:
+    """Otorga o revoca permisos de administrador a un técnico en la base de datos."""
+    nombre = " ".join(nombre.split())
+    if not nombre:
+        return False
+    try:
+        res = _tabla_tecnicos().update({"es_admin": es_admin}).eq("nombre", nombre).execute()
+        return bool(res.data)
+    except Exception as e:
+        print(f"[db] error asignando admin a {nombre}: {e}")
+        return False
+
+
+# --- Consultas y Búsquedas Avanzadas ---
+
+def buscar_reporte(termino: str, limite: int = 5) -> list[dict]:
+    """Busca reportes por número (#001), ID o por número de ticket."""
+    termino_limpio = termino.strip()
+    if not termino_limpio:
+        return []
+
+    id_num = parsear_numero(termino_limpio)
+    client = get_client()
+
+    try:
+        if id_num is not None:
+            res = client.table("reportes").select("*").eq("id", id_num).limit(1).execute()
+            if res.data:
+                return [_reporte_desde_fila(f) for f in res.data]
+
+        res = client.table("reportes").select("*").ilike("ticket", f"%{termino_limpio}%").order("id", desc=True).limit(limite).execute()
+        return [_reporte_desde_fila(f) for f in res.data]
+    except Exception as e:
+        print(f"[db] error buscando reporte con término '{termino_limpio}': {e}")
+        return []
+
+
+def listar_reportes_por_zona(zona: str, limite: int = 10) -> list[dict]:
+    """Obtiene los reportes más recientes registrados en una zona específica."""
+    zona_limpia = zona.strip()
+    if not zona_limpia:
+        return []
+    try:
+        res = (
+            get_client().table("reportes").select("*")
+            .ilike("ubicacion", f"%{zona_limpia}%")
+            .order("id", desc=True).limit(limite).execute()
+        )
+        return [_reporte_desde_fila(f) for f in reversed(res.data)]
+    except Exception as e:
+        print(f"[db] error listando reportes por zona '{zona_limpia}': {e}")
+        return []
+
+
+# --- Persistencia de Sesión Conversacional ---
+
+def guardar_estado_conversacion(
+    tecnico: str,
+    esperando: Optional[str],
+    folio_activo: Optional[str],
+    borrador: dict,
+) -> bool:
+    """Persiste el borrador y paso actual de la conversación en Supabase."""
+    if not tecnico:
+        return False
+    try:
+        get_client().table("sesiones_estado").upsert({
+            "tecnico": tecnico,
+            "esperando": esperando,
+            "folio_activo": folio_activo,
+            "borrador": borrador or {},
+            "actualizado": _ahora().isoformat(),
+        }, on_conflict="tecnico").execute()
+        return True
+    except Exception:
+        # Falla silenciosamente si la tabla sesiones_estado aún no ha sido migrada
+        return False
+
+
+def cargar_estado_conversacion(tecnico: str) -> Optional[dict]:
+    """Carga el estado persistido del técnico si existe en Supabase."""
+    if not tecnico:
+        return None
+    try:
+        res = get_client().table("sesiones_estado").select("*").eq("tecnico", tecnico).limit(1).execute()
+        if res.data:
+            fila = res.data[0]
+            return {
+                "esperando": fila.get("esperando"),
+                "folio_activo": fila.get("folio_activo"),
+                "borrador": fila.get("borrador") or {},
+            }
+    except Exception:
+        pass
+    return None
+
+
+def limpiar_estado_conversacion(tecnico: str) -> bool:
+    """Elimina el estado guardado del técnico en Supabase al terminar o cancelar."""
+    if not tecnico:
+        return False
+    try:
+        get_client().table("sesiones_estado").delete().eq("tecnico", tecnico).execute()
+        return True
+    except Exception:
+        return False
