@@ -12,7 +12,16 @@ import secrets
 import string
 from typing import Optional
 
-from app.config import TECNICOS, TECNICOS_INFO, ADMIN_TECNICOS, ZONA_HORARIA
+from app.config import (
+    TECNICOS,
+    TECNICOS_INFO,
+    ADMIN_TECNICOS,
+    ZONA_HORARIA,
+    CATALOGO_PROYECTOS,
+    PROYECTOS_INICIALES,
+    ZONAS_POR_PROYECTO,
+    CATALOGO_UBICACION,
+)
 from app.supabase_client import get_client
 
 _ALFABETO_CODIGO = string.ascii_uppercase + string.digits
@@ -48,6 +57,7 @@ def _reporte_desde_fila(fila: dict) -> dict:
         "numero": formatear_numero(fila["id"]),
         "ticket": fila["ticket"],
         "tecnico": fila["tecnico"],
+        "proyecto": fila.get("proyecto") or "Mina San Dimas",
         "departamento": fila.get("departamento") or "Infraestructura",
         "ubicacion": fila["ubicacion"],
         "actividad": fila["actividad"],
@@ -149,6 +159,7 @@ def crear_reporte(
     estado: str,
     departamento: str | list[str] = "Infraestructura",
     evidencias: Optional[list[str]] = None,
+    proyecto: str = "Mina San Dimas",
 ) -> str:
     """Guarda un reporte nuevo y regresa su número (#001, #002…)."""
     if isinstance(departamento, list) and evidencias is None:
@@ -159,9 +170,12 @@ def crear_reporte(
     else:
         departamento_str = "Infraestructura"
 
+    proyecto_str = (proyecto or "Mina San Dimas").strip()
+
     payload = {
         "ticket": ticket.strip(),
         "tecnico": tecnico.strip(),
+        "proyecto": proyecto_str,
         "ubicacion": ubicacion.strip(),
         "actividad": actividad.strip(),
         "estado": estado.strip(),
@@ -171,6 +185,13 @@ def crear_reporte(
     }
 
     client = get_client()
+
+    try:
+        proy_res = client.table("proyectos").select("id").ilike("nombre", proyecto_str).limit(1).execute()
+        if proy_res.data:
+            payload["proyecto_id"] = proy_res.data[0]["id"]
+    except Exception:
+        pass
 
     try:
         dep_res = client.table("departamentos").select("id").ilike("nombre", departamento_str).limit(1).execute()
@@ -238,19 +259,61 @@ def actualizar_reporte_pendiente(
     return True
 
 
-def reportes_en_periodo(desde: dt.date, hasta: dt.date) -> list[dict]:
+def reportes_en_periodo(desde: dt.date, hasta: dt.date, proyecto: Optional[str] = None) -> list[dict]:
     """Reportes creados entre `desde` y `hasta` (ambos inclusive, en fechas
-    locales), en orden de número."""
+    locales), opcionalmente filtrados por proyecto."""
     inicio = dt.datetime.combine(desde, dt.time.min, tzinfo=ZONA_HORARIA)
     fin = dt.datetime.combine(hasta + dt.timedelta(days=1), dt.time.min, tzinfo=ZONA_HORARIA)
-    res = (
+    consulta = (
         get_client().table("reportes").select("*")
         .gte("creado", inicio.isoformat()).lt("creado", fin.isoformat())
-        .order("id").execute()
     )
+    if proyecto and proyecto.strip() and proyecto.strip().lower() not in ("todos", "general", "todas"):
+        consulta = consulta.ilike("proyecto", f"%{proyecto.strip()}%")
+    res = consulta.order("id").execute()
     return [_reporte_desde_fila(f) for f in res.data]
 
-# --- Catálogos dinámicos ---
+
+# --- Catálogos dinámicos: Proyectos ---
+
+def listar_proyectos() -> list[dict]:
+    try:
+        res = get_client().table("proyectos").select("*").eq("activo", True).order("id").execute()
+        if res.data:
+            return res.data
+    except Exception:
+        pass
+    return [dict(p, id=i) for i, p in enumerate(PROYECTOS_INICIALES, 1)]
+
+
+def listar_nombres_proyectos() -> list[str]:
+    proyectos = listar_proyectos()
+    return [p["nombre"] for p in proyectos]
+
+
+def agregar_proyecto(nombre: str, tipo: str = "Durango", cliente: str = "") -> bool:
+    nombre = " ".join(nombre.split())
+    tipo_norm = "Mina" if "mina" in tipo.lower() else "Durango"
+    if not nombre or len(nombre) > 120:
+        return False
+    try:
+        existente = get_client().table("proyectos").select("id").ilike("nombre", nombre).limit(1).execute()
+        if existente.data:
+            return False
+        get_client().table("proyectos").insert({
+            "nombre": nombre,
+            "tipo": tipo_norm,
+            "cliente": cliente.strip(),
+            "activo": True,
+        }).execute()
+        return True
+    except Exception as e:
+        print(f"[db] error agregando proyecto {nombre}: {e}")
+        return False
+
+
+# --- Catálogos dinámicos: Departamentos y Zonas ---
+
 def listar_departamentos() -> list[str]:
     res = get_client().table("departamentos").select("nombre").eq("activo", True).order("nombre").execute()
     return [f["nombre"] for f in res.data]
@@ -267,20 +330,46 @@ def agregar_departamento(nombre: str) -> bool:
     return True
 
 
-def listar_zonas() -> list[str]:
-    res = get_client().table("zonas").select("nombre").eq("activo", True).order("nombre").execute()
-    return [f["nombre"] for f in res.data]
+def listar_zonas(proyecto: Optional[str] = None) -> list[str]:
+    try:
+        consulta = get_client().table("zonas").select("nombre, proyecto").eq("activo", True)
+        if proyecto:
+            res = consulta.ilike("proyecto", f"%{proyecto.strip()}%").order("nombre").execute()
+        else:
+            res = consulta.order("nombre").execute()
+        if res.data:
+            return [f["nombre"] for f in res.data]
+    except Exception:
+        pass
+
+    if proyecto:
+        for p_key, zonas in ZONAS_POR_PROYECTO.items():
+            if p_key.lower() in proyecto.lower() or proyecto.lower() in p_key.lower():
+                return list(zonas)
+    return list(CATALOGO_UBICACION)
 
 
-def asegurar_zona(nombre: str) -> str:
+def asegurar_zona(nombre: str, proyecto: Optional[str] = None) -> str:
     nombre = " ".join(nombre.split())
     if not nombre or len(nombre) > 160:
         raise ValueError("Nombre de zona inválido")
-    existente = get_client().table("zonas").select("nombre").ilike("nombre", nombre).limit(1).execute()
-    if existente.data:
-        return existente.data[0]["nombre"]
-    res = get_client().table("zonas").insert({"nombre": nombre}).execute()
-    return res.data[0]["nombre"]
+    try:
+        existente = get_client().table("zonas").select("nombre").ilike("nombre", nombre).limit(1).execute()
+        if existente.data:
+            return existente.data[0]["nombre"]
+        payload = {"nombre": nombre}
+        if proyecto:
+            payload["proyecto"] = proyecto.strip()
+            try:
+                p_res = get_client().table("proyectos").select("id").ilike("nombre", proyecto.strip()).limit(1).execute()
+                if p_res.data:
+                    payload["proyecto_id"] = p_res.data[0]["id"]
+            except Exception:
+                pass
+        res = get_client().table("zonas").insert(payload).execute()
+        return res.data[0]["nombre"]
+    except Exception:
+        return nombre
 
 
 # --- Administradores Dinámicos ---

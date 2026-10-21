@@ -1,6 +1,6 @@
-# PRD — Reporte de Campo Ágil para Mina
+# PRD — Reporte de Campo Ágil para Mina y Proyectos Durango
 
-**Versión:** 1.2 — actualizado con departamentos, zonas dinámicas y endurecimiento de seguridad  
+**Versión:** 1.3 — soporte bivalente de sedes/proyectos (Mina San Dimas y Durango), catálogos contextuales y exportación especializada  
 **Estado:** Piloto funcional en Telegram, probado con Supabase y exportación Excel  
 **Canal:** Telegram Bot  
 
@@ -8,59 +8,63 @@
 
 ## 0. Resumen de evolución del producto
 
-| Aspecto | PRD v1.0 / v1.1 | Implementado v1.2 |
-|---|---|---|
-| **Backend** | Python + FastAPI | Python + FastAPI |
-| **Base de datos** | PostgreSQL (Supabase) | PostgreSQL (Supabase) con catálogos dinámicos (`departamentos`, `zonas`, `reportes`) |
-| **Archivos/evidencias** | Supabase Storage | Supabase Storage (validación estricta de imágenes, máx 10 MB) |
-| **Flujo de conversación** | 5 pasos (Ticket, Ubicación, Actividad, Estado, Foto) | 7 pasos (Ticket, Departamento, Zona, Actividad, Estado, Evidencia, Confirmación) |
-| **Catálogos dinámicos** | Ubicaciones fijas | Departamentos y zonas dinámicos en Supabase con auto-registro de zonas ("Otra") |
-| **Comandos Admin** | `/nuevo_tecnico`, `/reporte` | `/nuevo_tecnico`, `/nuevo_departamento`, `/departamentos`, `/reporte` |
-| **Reportes y Exportación**| Excel estático | Excel dinámico agrupado por departamento y ubicación |
+| Aspecto | PRD v1.0 / v1.1 | Implementado v1.2 | Implementado v1.3 (Multi-Proyecto) |
+|---|---|---|---|
+| **Backend** | Python + FastAPI | Python + FastAPI | Python + FastAPI |
+| **Base de datos** | PostgreSQL (Supabase) | Tablas `departamentos`, `zonas`, `reportes` | Tabla `proyectos`, `zonas` y `reportes` vinculados a proyecto |
+| **Archivos/evidencias** | Supabase Storage | Validación imágenes, máx 10 MB | Validación + marca de agua automática con Sede/Proyecto |
+| **Flujo conversación** | 5 pasos | 7 pasos | 8 pasos (Proyecto, Ticket, Depto, Zona, Actividad, Estado, Evidencia, Confirmación) |
+| **Catálogos dinámicos** | Ubicaciones fijas | Dinámicos en Supabase | Zonas filtradas automáticamente según el proyecto/sede elegida |
+| **Comandos Admin** | `/nuevo_tecnico`, `/reporte` | `/nuevo_departamento`, `/departamentos` | `/proyectos`, `/nuevo_proyecto`, `/reporte [desde] [hasta] [proyecto]` |
+| **Reportes y Exportación**| Excel estático | Excel dinámico con resumen | Excel especializado con carátula por cliente (First Majestic / Qtek) y desglose por proyecto |
 
 ---
 
 ## 1. Objetivo
 
-El sistema permite que un técnico registre una actividad en campo de forma guiada e interactiva.
+El sistema permite que un técnico registre una actividad en campo de forma guiada e interactiva, tanto en operaciones mineras como en proyectos urbanos e industriales de Durango.
 
 El reporte solicita secuencialmente:
-1. Ticket
-2. Departamento
-3. Zona / Ubicación
-4. Actividad realizada
-5. Estado final
-6. Foto(s) de evidencia opcional(es)
-7. Confirmación final antes del guardado
+1. Proyecto / Sede (ej. Mina San Dimas, Proyectos Durango)
+2. Ticket u orden de trabajo
+3. Departamento
+4. Zona / Ubicación (filtrada contextualmente según el proyecto)
+5. Actividad realizada
+6. Estado final
+7. Foto(s) de evidencia opcional(es)
+8. Confirmación final antes del guardado
 
 El sistema obtiene automáticamente: Técnico, Fecha, Hora, Número de reporte (`#001`, `#002`...).
 
 ---
 
-## 2. Flujo principal (implementado en 7 pasos)
+## 2. Flujo principal (implementado en 8 pasos)
 
-### Paso 1 — Ticket
+### Paso 1 — Proyecto / Sede
+🏗️ **Selección interactiva:** `⛏️ Mina San Dimas`, `🏙️ Proyectos Durango`, o proyectos creados dinámicamente.
+
+### Paso 2 — Ticket
 🎫 **Ingresa el número de ticket:** Texto libre (ej. `TK-001254`) o botón **Sin ticket** (genera folio temporal `S/T-AAMMDD-HHMMSS`).
 
-### Paso 2 — Departamento
-🏢 **Selección por lista/botones:** Departamentos dinámicos de Supabase (ej. `Infraestructura`, `Mantenimiento`). Administrable vía `/nuevo_departamento` y `/departamentos`.
+### Paso 3 — Departamento
+🏢 **Selección por lista/botones:** Departamentos dinámicos de Supabase (ej. `Infraestructura`, `Mantenimiento`, `Sistemas`). Administrable vía `/nuevo_departamento` y `/departamentos`.
 
-### Paso 3 — Zona / Ubicación
-📍 **Selección dinámica:** Zonas de Supabase (ej. `Nivel 10`, `Nivel 11`, `Nivel 12`) o **Otra**. Al teclear una zona nueva o elegir Otra, se persiste automáticamente en el catálogo para futuros reportes.
+### Paso 4 — Zona / Ubicación
+📍 **Selección contextual dinámica:** Zonas de Supabase filtradas por el proyecto seleccionado (ej. en Mina: `Nivel 10`, `Nivel 11`, `Planta Beneficio`; en Durango: `Oficinas Centrales`, `Taller Qtek`, `Site Corporativo`, `Otra`). Si se ingresa una nueva zona, se asocia automáticamente al proyecto actual.
 
-### Paso 4 — Actividad
+### Paso 5 — Actividad
 📝 **Texto libre**, descripción breve del trabajo realizado.
 
-### Paso 5 — Estado
+### Paso 6 — Estado
 📊 **Tres botones:** ✅ Terminado / ⏸️ Pendiente / ❌ No solucionado.
 
-### Paso 6 — Evidencia
-📷 **Opcional, por botón** (Agregar foto / Omitir). Valida que sea imagen real y que no supere 10 MB. Permite varias fotos antes de continuar.
+### Paso 7 — Evidencia
+📷 **Opcional, por botón** (Agregar foto / Omitir). Valida que sea imagen real, aplica marca de agua contextual y guarda en bucket `evidencias`.
 
-### Paso 7 — Confirmación
-📋 **Resumen previo al guardado:** Muestra Ticket, Departamento, Ubicación, Actividad, Estado y conteo de evidencias, con opciones `✅ Guardar`, `✏️ Editar`, `❌ Cancelar`.
+### Paso 8 — Confirmación
+📋 **Resumen previo al guardado:** Muestra Proyecto, Ticket, Departamento, Ubicación, Actividad, Estado y conteo de evidencias, con opciones `✅ Guardar`, `✏️ Editar`, `❌ Cancelar`.
 
-**✔ Los 7 pasos están implementados y probados de punta a punta**
+**✔ Los 8 pasos están implementados y probados de punta a punta**
 
 ---
 

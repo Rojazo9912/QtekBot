@@ -28,7 +28,7 @@ TECLADO_ACCIONES = {
 TECLADO_ADMIN = {
     "keyboard": _FILAS_MENU + [
         [{"text": "👤 + Nuevo técnico"}, {"text": "🏢 Departamentos"}],
-        [{"text": "📊 Exportar Excel"}],
+        [{"text": "🏗️ Proyectos"}, {"text": "📊 Exportar Excel"}],
     ],
     "resize_keyboard": True,
 }
@@ -52,6 +52,12 @@ ALIAS_BOTONES = {
     "🏢 departamentos": "departamentos",
     "+ nuevo departamento": "nuevo departamento",
     "🏢 + nuevo departamento": "nuevo departamento",
+    "proyectos": "proyectos",
+    "/proyectos": "proyectos",
+    "🏗️ proyectos": "proyectos",
+    "+ nuevo proyecto": "nuevo proyecto",
+    "nuevo proyecto": "nuevo proyecto",
+    "🏗️ + nuevo proyecto": "nuevo proyecto",
 }
 
 

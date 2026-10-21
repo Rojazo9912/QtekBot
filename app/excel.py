@@ -25,7 +25,7 @@ from openpyxl.utils.units import pixels_to_EMU
 from PIL import Image as PILImage
 
 from app import storage
-from app.config import CATALOGO_ESTADO_REPORTE, CONTRATO_INFO, ZONA_HORARIA
+from app.config import CATALOGO_ESTADO_REPORTE, CONTRATO_INFO, ZONA_HORARIA, obtener_info_contrato
 
 _AZUL = "1F3864"
 _GRIS = "F2F2F2"
@@ -123,20 +123,32 @@ def _tabla_conteo(ws, fila: int, titulo: str, encabezados: list[str], filas: lis
     return fila + 3 + len(filas)
 
 
-def _hoja_resumen(ws, reportes: list[dict], desde: dt.date, hasta: dt.date) -> None:
+def _hoja_resumen(ws, reportes: list[dict], desde: dt.date, hasta: dt.date, proyecto: Optional[str] = None) -> None:
     ws.title = "Resumen"
     ws.sheet_view.showGridLines = False
-    _anchos(ws, [34, 16, 14, 14, 16])
+    _anchos(ws, [34, 18, 14, 14, 16])
 
-    ws["A1"] = "Reporte de Actividades de Campo TI"
+    # Determinar información del contrato y cabecera
+    proyectos_presentes = list(dict.fromkeys(r.get("proyecto", "Mina San Dimas") for r in reportes))
+    if proyecto:
+        proy_nombre = proyecto
+        contrato = obtener_info_contrato(proyecto)
+    elif len(proyectos_presentes) == 1:
+        proy_nombre = proyectos_presentes[0]
+        contrato = obtener_info_contrato(proy_nombre)
+    else:
+        proy_nombre = "Consolidado General (Mina y Durango)"
+        contrato = obtener_info_contrato(None)
+
+    ws["A1"] = f"Reporte de Actividades TI — {proy_nombre}"
     ws["A1"].font = _FUENTE_TITULO
 
     generado = dt.datetime.now(ZONA_HORARIA).strftime("%Y-%m-%d %H:%M")
     datos = [
-        ("Contratista", CONTRATO_INFO["contratista"]),
-        ("Contrato marco No.", CONTRATO_INFO["contrato_marco_no"]),
-        ("Ubicación de los servicios", CONTRATO_INFO["ubicacion_servicios"]),
-        ("Área de servicio", CONTRATO_INFO["area_servicio"]),
+        ("Contratista", contrato.get("contratista", "Qtek Computación, S.A. de C.V.")),
+        ("Contrato marco No.", contrato.get("contrato_marco_no", "N/A")),
+        ("Ubicación de los servicios", contrato.get("ubicacion_servicios", proy_nombre)),
+        ("Área de servicio", contrato.get("area_servicio", "Soporte TI")),
         ("Periodo", f"{desde.isoformat()} a {hasta.isoformat()}"),
         ("Generado", generado),
         ("Total de reportes", len(reportes)),
@@ -147,6 +159,18 @@ def _hoja_resumen(ws, reportes: list[dict], desde: dt.date, hasta: dt.date) -> N
         ws.cell(row=i, column=2, value=valor).alignment = Alignment(horizontal="left")
 
     fila = 3 + len(datos) + 1
+
+    # Desglose por Proyecto si hay varios o reporte general
+    proyectos_unicos = sorted(set(r.get("proyecto", "Mina San Dimas") for r in reportes))
+    if len(proyectos_unicos) > 0:
+        filas_proy = []
+        for p in proyectos_unicos:
+            reps_p = [r for r in reportes if r.get("proyecto", "Mina San Dimas") == p]
+            filas_proy.append([p, len(reps_p)] + [sum(1 for r in reps_p if r["estado"] == e) for e in CATALOGO_ESTADO_REPORTE])
+        fila = _tabla_conteo(
+            ws, fila, "Por proyecto", ["Proyecto", "Total", *CATALOGO_ESTADO_REPORTE],
+            filas_proy,
+        )
 
     por_estado = Counter(r["estado"] for r in reportes)
     fila = _tabla_conteo(
@@ -197,12 +221,13 @@ def _insertar_miniaturas(ws, fila: int, col: int, minis: list[tuple[bytes, int, 
 def _hoja_reportes(ws, reportes: list[dict]) -> None:
     titulos = [
         "Número", "Ticket", "Departamento", "Ubicación", "Actividad", "Estado",
-        "Fotos", "Fecha", "Hora", "Última actualización", "Evidencias",
+        "Fotos", "Fecha", "Hora", "Última actualización", "Evidencias", "Proyecto",
     ]
     _encabezados(ws, 1, titulos)
-    _anchos(ws, [10, 16, 28, 14, 60, 16, 8, 12, 10, 20, 30])
+    _anchos(ws, [10, 16, 28, 14, 60, 16, 8, 12, 10, 20, 30, 20])
     ws.freeze_panes = "A2"
-    col_evidencias = len(titulos)
+    col_evidencias = 11
+    col_proyecto = 12
     miniaturas = _miniaturas_por_url(reportes)
     ancho_max_px = 0
 
@@ -227,6 +252,11 @@ def _hoja_reportes(ws, reportes: list[dict]) -> None:
             ws.row_dimensions[i].height = (_MINI_ALTO_PX + 2 * _MINI_MARGEN_PX) * 0.75
         elif r["evidencias"]:
             ws.cell(row=i, column=col_evidencias, value="Ver hoja Evidencias").alignment = _ARRIBA
+
+        # Celda de Proyecto
+        c_proy = ws.cell(row=i, column=col_proyecto, value=r.get("proyecto", "Mina San Dimas"))
+        c_proy.alignment = _ARRIBA
+        c_proy.border = _BORDE
 
     if ancho_max_px:
         # Ancho de columna en caracteres ≈ (píxeles - 5) / 7
@@ -256,14 +286,18 @@ def _hoja_evidencias(ws, reportes: list[dict]) -> None:
         ws.cell(row=2, column=1, value="Sin fotos en el periodo").font = Font(italic=True, color="808080")
 
 
-def generar_excel(reportes: list[dict], desde: dt.date, hasta: dt.date) -> tuple[bytes, str]:
+def generar_excel(reportes: list[dict], desde: dt.date, hasta: dt.date, proyecto: Optional[str] = None) -> tuple[bytes, str]:
     """Regresa (contenido del .xlsx, nombre de archivo sugerido)."""
     wb = Workbook()
-    _hoja_resumen(wb.active, reportes, desde, hasta)
+    _hoja_resumen(wb.active, reportes, desde, hasta, proyecto=proyecto)
     _hoja_reportes(wb.create_sheet("Reportes"), reportes)
     _hoja_evidencias(wb.create_sheet("Evidencias"), reportes)
 
     buffer = io.BytesIO()
     wb.save(buffer)
-    nombre = f"Reporte_Campo_{desde.isoformat()}_a_{hasta.isoformat()}.xlsx"
+    if proyecto:
+        limpio = "".join(c for c in proyecto if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+        nombre = f"Reporte_{limpio}_{desde.isoformat()}_a_{hasta.isoformat()}.xlsx"
+    else:
+        nombre = f"Reporte_Campo_{desde.isoformat()}_a_{hasta.isoformat()}.xlsx"
     return buffer.getvalue(), nombre

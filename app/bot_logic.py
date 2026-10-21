@@ -149,30 +149,65 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         persistir_estado(tecnico)
         return respuestas
 
+    # Flujo de Admin: Alta de nuevo proyecto
+    if estado.esperando == "admin_nombre_proyecto":
+        partes = [p.strip() for p in texto_limpio.split("|")]
+        nombre_p = partes[0]
+        tipo_p = partes[1] if len(partes) > 1 else "Durango"
+        cli_p = partes[2] if len(partes) > 2 else ""
+        try:
+            creado = db.agregar_proyecto(nombre_p, tipo=tipo_p, cliente=cli_p)
+            estado.esperando = None
+            if creado:
+                decir(f"✅ Proyecto creado exitosamente: *{nombre_p}* ({tipo_p}) para cliente *{cli_p or 'N/A'}*.")
+            else:
+                decir(f"El proyecto *{nombre_p}* ya existe o es inválido.")
+        except Exception as e:
+            print(f"[admin] error registrando proyecto: {e}")
+            decir("❌ No pude registrar el proyecto por un error con la base de datos.")
+            estado.esperando = None
+        persistir_estado(tecnico)
+        return respuestas
+
     # --- COMANDO DE REGISTRO RÁPIDO (ONE-SHOT) ---
     if t_norm.startswith("/registro") or t_norm.startswith("/reporte_rapido"):
         partes_str = texto_limpio.removeprefix("/registro").removeprefix("/reporte_rapido").strip()
         if not partes_str:
             decir(
                 "⚡ *Registro Rápido en 1 solo mensaje (One-Shot):*\n\n"
-                "Formato:\n`/registro <Ticket> | <Departamento> | <Zona> | <Actividad> | <Estado>`\n\n"
-                "*Ejemplo:*\n"
-                "`/registro TK-102 | Infraestructura | Nivel 10 | Ajuste de Leaky Feeder | Terminado`\n\n"
-                "O sin ticket:\n"
+                "Formato completo (Mina o Durango):\n"
+                "`/registro <Proyecto> | <Ticket> | <Departamento> | <Zona> | <Actividad> | <Estado>`\n\n"
+                "*Ejemplo Mina:*\n"
+                "`/registro Mina San Dimas | TK-102 | Infraestructura | Nivel 10 | Ajuste de Leaky Feeder | Terminado`\n\n"
+                "*Ejemplo Durango:*\n"
+                "`/registro Proyectos Durango | TK-501 | Soporte TI | Oficinas Qtek | Configuración Switch | Terminado`\n\n"
+                "O formato estándar (asume Mina):\n"
                 "`/registro Sin ticket | Mantenimiento | Nivel 11 | Revisión general | Pendiente`"
             )
             return respuestas
 
         campos = [c.strip() for c in partes_str.split("|")]
         if len(campos) < 4:
-            decir("❌ Formato incompleto. Usa:\n`/registro <Ticket> | <Departamento> | <Zona> | <Actividad> | <Estado>`")
+            decir("❌ Formato incompleto. Usa:\n`/registro [Proyecto |] <Ticket> | <Departamento> | <Zona> | <Actividad> | <Estado>`")
             return respuestas
 
-        if len(campos) == 4:
+        proyectos_disponibles = db.listar_nombres_proyectos()
+        if len(campos) >= 6:
+            raw_proy, raw_tkt, raw_dep, raw_zona, raw_act, raw_est = campos[:6]
+        elif len(campos) == 5:
+            # Si el primer campo coincide con un proyecto registrado
+            if any(_remover_acentos(p) == _remover_acentos(campos[0]) for p in proyectos_disponibles):
+                raw_proy, raw_tkt, raw_zona, raw_act, raw_est = campos
+                raw_dep = "Infraestructura"
+            else:
+                raw_proy = "Mina San Dimas"
+                raw_tkt, raw_dep, raw_zona, raw_act, raw_est = campos
+        else:  # len == 4
+            raw_proy = "Mina San Dimas"
             raw_tkt, raw_zona, raw_act, raw_est = campos
             raw_dep = "Infraestructura"
-        else:
-            raw_tkt, raw_dep, raw_zona, raw_act, raw_est = campos[:5]
+
+        proy_val = next((p for p in proyectos_disponibles if _remover_acentos(p) == _remover_acentos(raw_proy)), raw_proy or "Mina San Dimas")
 
         # Ticket
         ticket_val = generar_ticket_temporal() if _es_sin_ticket(raw_tkt) else raw_tkt
@@ -186,7 +221,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
         # Zona
         try:
-            zona_val = db.asegurar_zona(raw_zona)
+            zona_val = db.asegurar_zona(raw_zona, proyecto=proy_val)
         except Exception:
             zona_val = raw_zona
 
@@ -196,6 +231,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             estado_val = "Terminado"
 
         estado.borrador = {
+            "proyecto": proy_val,
             "ticket": ticket_val,
             "departamento": depto_val,
             "ubicacion": zona_val,
@@ -222,8 +258,8 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         for r in encontrados:
             lineas.append(
                 f"\n• *{r['numero']}* | Ticket: `{r['ticket']}`\n"
-                f"  🏢 {r['departamento']} | 📍 {r['ubicacion']}\n"
-                f"  📝 {r['actividad']}\n"
+                f"  🏗️ {r.get('proyecto', 'Mina San Dimas')} | 🏢 {r['departamento']}\n"
+                f"  📍 {r['ubicacion']} | 📝 {r['actividad']}\n"
                 f"  📊 Estado: *{r['estado']}* | 👤 {r['tecnico']} ({r['fecha']})"
             )
             if r.get("evidencias"):
@@ -235,7 +271,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         partes = texto_limpio.split(maxsplit=1)
         zona_b = partes[1].strip() if len(partes) > 1 else ""
         if not zona_b:
-            decir("📍 Usa: `/zona <nombre>` (ej. `/zona Nivel 10`).")
+            decir("📍 Usa: `/zona <nombre>` (ej. `/zona Nivel 10` o `/zona Oficinas Qtek`).")
             return respuestas
         encontrados = db.listar_reportes_por_zona(zona_b)
         if not encontrados:
@@ -243,19 +279,47 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             return respuestas
         lineas = [f"📍 *Reportes recientes en {zona_b}:*"]
         for r in encontrados:
-            lineas.append(f"• *{r['numero']}* [{r['estado']}] | Ticket: {r['ticket']} — {r['actividad']} ({r['fecha']})")
+            lineas.append(f"• *{r['numero']}* [{r['estado']}] | Ticket: {r['ticket']} — {r.get('proyecto', 'Mina')} — {r['actividad']} ({r['fecha']})")
         decir("\n".join(lineas))
         return respuestas
 
+    if t_norm.startswith("/proyecto") or t_norm in ("proyectos", "/proyectos", "ver proyectos"):
+        termino = ""
+        if t_norm.startswith("/proyecto ") and len(texto_limpio.split(maxsplit=1)) > 1:
+            termino = texto_limpio.split(maxsplit=1)[1].strip()
+        if termino:
+            try:
+                encontrados = db.reportes_en_periodo(dt.date(2020, 1, 1), dt.date(2030, 1, 1), proyecto=termino)
+            except Exception:
+                encontrados = []
+            if not encontrados:
+                decir(f"🏗️ No se encontraron reportes registrados para el proyecto: *{termino}*")
+                return respuestas
+            lineas = [f"🏗️ *Reportes recientes en {termino}:*"]
+            for r in encontrados[-10:]:
+                lineas.append(f"• *{r['numero']}* [{r['estado']}] | Ticket: {r['ticket']} — {r['ubicacion']}: {r['actividad']} ({r['fecha']})")
+            decir("\n".join(lineas))
+            return respuestas
+
+        proyectos = db.listar_proyectos()
+        lineas = ["🏗️ *Proyectos y Sedes registradas:*"]
+        for p in proyectos:
+            tipo = p.get("tipo", "General")
+            cli = f" (Cliente: {p['cliente']})" if p.get("cliente") else ""
+            lineas.append(f"• *{p['nombre']}* — Tipo: {tipo}{cli}")
+        if es_admin:
+            lineas.append("\nPara agregar otro proyecto usa:\n`/nuevo_proyecto <Nombre> | <Tipo: Mina o Durango> | <Cliente>`")
+        decir("\n".join(lineas))
+        return respuestas
     # --- NAVEGACIÓN DEL MENÚ PRINCIPAL ---
     if t_norm in ("nuevo reporte", "+ nuevo reporte", "/nuevo_reporte", "nueva actividad", "+ nueva actividad", "/start"):
-        # Reiniciar borrador y comenzar Paso 1 (Ticket)
+        # Reiniciar borrador y comenzar Paso 1 (Proyecto o Sede)
         estado.borrador = {"evidencias": []}
-        estado.esperando = "ticket"
+        estado.esperando = "proyecto"
+        proyectos = db.listar_nombres_proyectos()
         decir(
-            "🎫 *Paso 1 de 7 — Ticket*\n\n"
-            "Ingresa el número de ticket u orden de trabajo (ej. TK-001254).\n"
-            "Si no cuentas con ticket, pulsa *'Sin ticket'* o escribe *'Sin ticket'*:"
+            "🏗️ *Paso 1 de 8 — Proyecto o Sede*\n\n"
+            "Selecciona el proyecto o centro de trabajo:\n" + "\n".join(f"• {p}" for p in proyectos)
         )
         persistir_estado(tecnico)
         return respuestas
@@ -268,7 +332,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
         lineas = ["⏸️ *Tus reportes pendientes:*"]
         for p in pendientes:
-            lineas.append(f"• *{p['numero']}* (Ticket: {p['ticket']}) — {p['ubicacion']}: {p['actividad']}")
+            lineas.append(f"• *{p['numero']}* (Ticket: {p['ticket']}) — {p.get('proyecto', 'Mina')} / {p['ubicacion']}: {p['actividad']}")
         lineas.append("\nResponde con el número de reporte (ej. `#001` o `001`) que deseas continuar o actualizar:")
         estado.esperando = "seleccion_pendiente"
         estado.borrador = {"pendientes": [p["numero"] for p in pendientes]}
@@ -286,7 +350,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         lineas = ["📋 *Tus últimos reportes:*"]
         for r in reportes:
             icono = iconos.get(r["estado"], "•")
-            lineas.append(f"{icono} *{r['numero']}* | Ticket: {r['ticket']} | {r['ubicacion']} ({r['fecha']})")
+            lineas.append(f"{icono} *{r['numero']}* | {r.get('proyecto', 'Mina')} | Ticket: {r['ticket']} | {r['ubicacion']} ({r['fecha']})")
         decir("\n".join(lineas))
         return respuestas
 
@@ -321,13 +385,34 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         persistir_estado(tecnico)
         return respuestas
 
+    if t_norm.startswith("/nuevo_proyecto") or t_norm in ("nuevo proyecto", "+ nuevo proyecto"):
+        if not es_admin:
+            decir("No tienes permisos de administrador para agregar proyectos.")
+            return respuestas
+        args = texto_limpio.removeprefix("/nuevo_proyecto").strip() if t_norm.startswith("/nuevo_proyecto") else ""
+        if args:
+            partes = [p.strip() for p in args.split("|")]
+            nombre_p = partes[0]
+            tipo_p = partes[1] if len(partes) > 1 else "Durango"
+            cli_p = partes[2] if len(partes) > 2 else ""
+            if db.agregar_proyecto(nombre=nombre_p, tipo=tipo_p, cliente=cli_p):
+                decir(f"✅ Proyecto *{nombre_p}* guardado correctamente (Tipo: {tipo_p}).")
+            else:
+                decir(f"❌ No se pudo guardar el proyecto *{nombre_p}* (quizás ya existe o es inválido).")
+            return respuestas
+        estado.esperando = "admin_nombre_proyecto"
+        decir("🏗️ Escribe los datos del nuevo proyecto en formato:\n`Nombre | Tipo (Mina/Durango) | Cliente`\n(o escribe Cancelar):")
+        persistir_estado(tecnico)
+        return respuestas
+
     if t_norm in ("ayuda", "comandos", "/help"):
         lineas = [
             "🤖 *Comandos de Reporte de Campo:*",
-            "• *➕ Nuevo reporte*: Inicia el registro de un reporte paso a paso (7 pasos).",
-            "• `/registro ...`: Registro rápido en un solo mensaje (One-Shot).",
+            "• *➕ Nuevo reporte*: Inicia el registro de un reporte paso a paso (8 pasos).",
+            "• `/registro ...`: Registro rápido en un solo mensaje (One-Shot para Mina o Durango).",
             "• *⏸️ Mis pendientes*: Muestra y permite continuar reportes pendientes.",
             "• *📋 Mis reportes*: Muestra tu historial de reportes.",
+            "• `/proyectos`: Consulta los proyectos y sedes disponibles (o `/proyecto <nombre>`).",
             "• `/buscar <ticket>`: Busca el estado y detalle de un ticket.",
             "• `/zona <nombre>`: Consulta los reportes en una zona.",
             "• *Cancelar*: Cancela el proceso actual.",
@@ -335,17 +420,40 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         if es_admin:
             lineas.append("\n👑 *Comandos de Administrador:*")
             lineas.append("• *👤 + Nuevo técnico*: Genera código de activación para un técnico nuevo.")
+            lineas.append("• `/nuevo_proyecto Nombre | Tipo | Cliente`: Registra un proyecto nuevo.")
             lineas.append("• `/nuevo_departamento Nombre`: Registra un departamento nuevo.")
             lineas.append("• `/departamentos`: Consulta los departamentos disponibles.")
             lineas.append("• *📊 Exportar Excel*: Descarga reporte semanal en Excel.")
-            lineas.append("• `/reporte AAAA-MM-DD AAAA-MM-DD`: Reporte Excel de otro periodo.")
+            lineas.append("• `/reporte [desde] [hasta] [proyecto]`: Reporte Excel filtrado o consolidado.")
             lineas.append("• `/fotos [desde] [hasta]`: Descarga ZIP con fotos de evidencias.")
         decir("\n".join(lineas))
         return respuestas
 
-    # --- MÁQUINA DE ESTADOS (FLUJO DE 7 PASOS) ---
+    # --- MÁQUINA DE ESTADOS (FLUJO DE 8 PASOS) ---
 
-    # Paso 1: Ticket
+    # Paso 1: Proyecto / Sede
+    if estado.esperando == "proyecto":
+        proyectos = db.listar_nombres_proyectos()
+        proy_sel = None
+        for p in proyectos:
+            if t_norm and (_remover_acentos(p) == t_norm or t_norm in _remover_acentos(p)):
+                proy_sel = p
+                break
+        if not proy_sel:
+            proy_sel = texto_limpio
+
+        estado.borrador["proyecto"] = proy_sel
+        estado.esperando = "ticket"
+        decir(
+            f"🏗️ Proyecto: *{proy_sel}*\n\n"
+            "🎫 *Paso 2 de 8 — Ticket*\n\n"
+            "Ingresa el número de ticket u orden de trabajo (ej. TK-001254).\n"
+            "Si no cuentas con ticket, pulsa *'Sin ticket'* o escribe *'Sin ticket'*:"
+        )
+        persistir_estado(tecnico)
+        return respuestas
+
+    # Paso 2: Ticket
     if estado.esperando == "ticket":
         if _es_sin_ticket(texto_limpio):
             ticket_asignado = generar_ticket_temporal()
@@ -359,11 +467,11 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             departamentos = db.listar_departamentos()
         except Exception:
             departamentos = ["Infraestructura"]
-        decir("🏢 *Paso 2 de 7 — Departamento*\n\nSelecciona el departamento:\n" + "\n".join(f"• {d}" for d in departamentos))
+        decir("🏢 *Paso 3 de 8 — Departamento*\n\nSelecciona el departamento:\n" + "\n".join(f"• {d}" for d in departamentos))
         persistir_estado(tecnico)
         return respuestas
 
-    # Paso 2: Departamento
+    # Paso 3: Departamento
     if estado.esperando == "departamento":
         try:
             departamentos = db.listar_departamentos()
@@ -375,16 +483,19 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             return respuestas
         estado.borrador["departamento"] = departamento
         estado.esperando = "ubicacion"
+
+        proy_actual = estado.borrador.get("proyecto", "Mina San Dimas")
         try:
-            zonas = db.listar_zonas()
+            zonas = db.listar_zonas(proyecto=proy_actual)
         except Exception:
             zonas = CATALOGO_UBICACION
-        decir("📍 *Paso 3 de 7 — Zona*\n\nSelecciona la zona o escribe Otra:\n" + "\n".join(f"• {z}" for z in zonas))
+        decir(f"📍 *Paso 4 de 8 — Zona / Ubicación ({proy_actual})*\n\nSelecciona la zona o escribe Otra:\n" + "\n".join(f"• {z}" for z in zonas))
         persistir_estado(tecnico)
         return respuestas
 
-    # Paso 3: Ubicación / Zona
+    # Paso 4: Ubicación / Zona
     if estado.esperando == "ubicacion":
+        proy_actual = estado.borrador.get("proyecto")
         if t_norm in ("otra", "otra ubicacion"):
             estado.esperando = "ubicacion_otra"
             decir("📍 Escribe la ubicación personalizada:")
@@ -392,7 +503,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             return respuestas
 
         try:
-            zonas = db.listar_zonas()
+            zonas = db.listar_zonas(proyecto=proy_actual)
         except Exception:
             zonas = CATALOGO_UBICACION
 
@@ -403,33 +514,40 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
                 break
         if not ubicacion_sel:
             try:
-                ubicacion_sel = db.asegurar_zona(texto_limpio)
+                if proy_actual:
+                    ubicacion_sel = db.asegurar_zona(texto_limpio, proyecto=proy_actual)
+                else:
+                    ubicacion_sel = db.asegurar_zona(texto_limpio)
             except Exception:
                 ubicacion_sel = texto_limpio
 
         estado.borrador["ubicacion"] = ubicacion_sel
         estado.esperando = "actividad"
-        decir("📝 *Paso 4 de 7 — Actividad*\n\nDescribe brevemente la actividad realizada:")
+        decir("📝 *Paso 5 de 8 — Actividad*\n\nDescribe brevemente la actividad realizada:")
         persistir_estado(tecnico)
         return respuestas
 
     if estado.esperando == "ubicacion_otra":
-        estado.borrador["ubicacion"] = db.asegurar_zona(texto_limpio)
+        proy_actual = estado.borrador.get("proyecto")
+        if proy_actual:
+            estado.borrador["ubicacion"] = db.asegurar_zona(texto_limpio, proyecto=proy_actual)
+        else:
+            estado.borrador["ubicacion"] = db.asegurar_zona(texto_limpio)
         estado.esperando = "actividad"
-        decir("📝 *Paso 4 de 7 — Actividad*\n\nDescribe brevemente la actividad realizada:")
+        decir("📝 *Paso 5 de 8 — Actividad*\n\nDescribe brevemente la actividad realizada:")
         persistir_estado(tecnico)
         return respuestas
 
-    # Paso 4: Actividad
+    # Paso 5: Actividad
     if estado.esperando == "actividad":
         estado.borrador["actividad"] = texto_limpio
         estado.esperando = "estado"
         opciones_estado = "\n".join([f"• {e}" for e in CATALOGO_ESTADO_REPORTE])
-        decir(f"📊 *Paso 5 de 7 — Estado*\n\nSelecciona el estado final del reporte:\n{opciones_estado}")
+        decir(f"📊 *Paso 6 de 8 — Estado*\n\nSelecciona el estado final del reporte:\n{opciones_estado}")
         persistir_estado(tecnico)
         return respuestas
 
-    # Paso 5: Estado
+    # Paso 6: Estado
     if estado.esperando == "estado":
         estado_norm = _normalizar_estado(texto_limpio)
         if estado_norm not in CATALOGO_ESTADO_REPORTE:
@@ -438,13 +556,13 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         estado.borrador["estado"] = estado_norm
         estado.esperando = "evidencia"
         decir(
-            "📷 *Paso 6 de 7 — Evidencia Fotográfica*\n\n"
+            "📷 *Paso 7 de 8 — Evidencia Fotográfica*\n\n"
             "Manda una o varias fotos de evidencia por el chat, o responde *'Omitir'* para continuar sin fotos."
         )
         persistir_estado(tecnico)
         return respuestas
 
-    # Paso 6: Evidencia fotográfica
+    # Paso 7: Evidencia fotográfica
     if estado.esperando == "evidencia":
         if t_norm in ("omitir", "continuar", "listo", "sin fotos", "no"):
             _mostrar_confirmacion(estado, decir)
@@ -454,12 +572,13 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             decir("Manda una foto por el chat o responde *'Omitir'* / *'Continuar'* para pasar a la confirmación.")
             return respuestas
 
-    # Paso 7: Confirmación previa a guardado
+    # Paso 8: Confirmación previa a guardado
     if estado.esperando == "confirmacion":
         if t_norm in ("guardar", "si", "confirmar", "ok"):
             try:
                 b = estado.borrador
                 depto = b.get("departamento", "Infraestructura")
+                proy = b.get("proyecto", "Mina San Dimas")
                 numero_creado = db.crear_reporte(
                     ticket=b.get("ticket", "N/A"),
                     tecnico=tecnico,
@@ -468,11 +587,13 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
                     estado=b.get("estado", "Terminado"),
                     departamento=depto,
                     evidencias=b.get("evidencias", []),
+                    proyecto=proy,
                 )
                 now = _ahora()
                 decir(
                     f"✅ *Reporte guardado exitosamente*\n\n"
                     f"• *Número:* {numero_creado}\n"
+                    f"• *Proyecto:* {proy}\n"
                     f"• *Ticket:* {b.get('ticket')}\n"
                     f"• *Departamento:* {depto}\n"
                     f"• *Ubicación:* {b.get('ubicacion')}\n"
@@ -492,6 +613,7 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             decir(
                 "✏️ *¿Qué dato deseas corregir?*\n\n"
                 "Selecciona el campo que deseas modificar:\n"
+                "• 🏗️ Proyecto\n"
                 "• 🎫 Ticket\n"
                 "• 🏢 Departamento\n"
                 "• 📍 Zona\n"
@@ -506,11 +628,12 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
         elif t_norm in ("reiniciar", "reiniciar todo"):
             estado.borrador = {"evidencias": []}
-            estado.esperando = "ticket"
+            estado.esperando = "proyecto"
+            proyectos = db.listar_nombres_proyectos()
             decir(
                 "🔄 *Reiniciando el reporte.*\n\n"
-                "🎫 *Paso 1 de 7 — Ticket*\n\n"
-                "Ingresa el número de ticket (o pulsa *'Sin ticket'* si no tienes):"
+                "🏗️ *Paso 1 de 8 — Proyecto o Sede*\n\n"
+                "Selecciona el proyecto o centro de trabajo:\n" + "\n".join(f"• {p}" for p in proyectos)
             )
             persistir_estado(tecnico)
             return respuestas
@@ -525,7 +648,11 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
     # --- SUBFLUJO DE EDICIÓN GRANULAR ---
     if estado.esperando == "editar_campo_seleccion":
-        if "ticket" in t_norm:
+        if "proyecto" in t_norm:
+            estado.esperando = "editar_proyecto"
+            proyectos = db.listar_nombres_proyectos()
+            decir("🏗️ Selecciona el nuevo proyecto o centro de trabajo:\n" + "\n".join(f"• {p}" for p in proyectos))
+        elif "ticket" in t_norm:
             estado.esperando = "editar_ticket"
             decir("🎫 Ingresa el nuevo número de ticket (o 'Sin ticket'):")
         elif "departamento" in t_norm or "depto" in t_norm:
@@ -537,11 +664,12 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             decir("🏢 Selecciona el departamento:\n" + "\n".join(f"• {d}" for d in deptos))
         elif "zona" in t_norm or "ubicacion" in t_norm:
             estado.esperando = "editar_zona"
+            proy_act = estado.borrador.get("proyecto", "Mina San Dimas")
             try:
-                zonas = db.listar_zonas()
+                zonas = db.listar_zonas(proyecto=proy_act)
             except Exception:
                 zonas = CATALOGO_UBICACION
-            decir("📍 Selecciona la nueva zona o escribe Otra:\n" + "\n".join(f"• {z}" for z in zonas))
+            decir(f"📍 Selecciona la nueva zona ({proy_act}) o escribe Otra:\n" + "\n".join(f"• {z}" for z in zonas))
         elif "actividad" in t_norm:
             estado.esperando = "editar_actividad"
             decir("📝 Describe la nueva actividad realizada:")
@@ -554,12 +682,30 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             decir(f"📷 El borrador tiene actualmente {cant} foto(s).\n\nOpciones:\n• 🗑️ Borrar fotos\n• ➕ Agregar fotos\n• ↩️ Volver")
         elif "reiniciar" in t_norm:
             estado.borrador = {"evidencias": []}
-            estado.esperando = "ticket"
-            decir("🔄 Reiniciando reporte desde el Paso 1 (Ticket):")
+            estado.esperando = "proyecto"
+            proyectos = db.listar_nombres_proyectos()
+            decir("🔄 Reiniciando reporte desde el Paso 1 (Proyecto):\n" + "\n".join(f"• {p}" for p in proyectos))
         elif "volver" in t_norm or "cancelar" in t_norm:
             _mostrar_confirmacion(estado, decir)
         else:
-            decir("Selecciona uno de los campos a editar (Ticket, Departamento, Zona, Actividad, Estado, Fotos) o 'Volver'.")
+            decir("Selecciona uno de los campos a editar (Proyecto, Ticket, Departamento, Zona, Actividad, Estado, Fotos) o 'Volver'.")
+        persistir_estado(tecnico)
+        return respuestas
+
+    if estado.esperando == "editar_proyecto":
+        proyectos = db.listar_nombres_proyectos()
+        proy_sel = None
+        for p in proyectos:
+            if t_norm and (_remover_acentos(p) == t_norm or t_norm in _remover_acentos(p)):
+                proy_sel = p
+                break
+        if not proy_sel:
+            proy_sel = texto_limpio
+        estado.borrador["proyecto"] = proy_sel
+        decir(f"🏗️ Proyecto actualizado a: *{proy_sel}*")
+        _mostrar_confirmacion(estado, decir)
+        persistir_estado(tecnico)
+        return respuestas
         persistir_estado(tecnico)
         return respuestas
 
@@ -726,7 +872,8 @@ def _mostrar_confirmacion(estado, decir):
 
     estado.esperando = "confirmacion"
     resumen = (
-        f"📋 *Confirmación del Reporte (Paso 7 de 7)*\n\n"
+        f"📋 *Confirmación del Reporte (Paso 8 de 8)*\n\n"
+        f"• *Proyecto:* {b.get('proyecto', 'Mina San Dimas')}\n"
         f"• *Ticket:* {b.get('ticket', 'N/A')}\n"
         f"• *Departamento:* {b.get('departamento', 'Infraestructura')}\n"
         f"• *Ubicación:* {b.get('ubicacion', 'N/A')}\n"

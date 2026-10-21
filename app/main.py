@@ -85,6 +85,7 @@ def _periodo(desde: str = "", hasta: str = "") -> tuple[dt.date, dt.date]:
 
 # Pasos de la conversación en los que el bot ofrece un catálogo fijo de opciones
 CATALOGOS_POR_ESTADO = {
+    "proyecto": [],
     "ticket": ["Sin ticket"],
     "departamento": [],
     "ubicacion": CATALOGO_UBICACION,
@@ -92,24 +93,33 @@ CATALOGOS_POR_ESTADO = {
     "estado": CATALOGO_ESTADO_REPORTE,
     "evidencia": ["Omitir"],
     "confirmacion": ["✅ Guardar", "✏️ Editar", "❌ Cancelar"],
-    "editar_campo_seleccion": ["🎫 Ticket", "🏢 Departamento", "📍 Zona", "📝 Actividad", "📊 Estado", "📷 Fotos", "🔄 Reiniciar todo", "↩️ Volver"],
+    "editar_campo_seleccion": ["🏗️ Proyecto", "🎫 Ticket", "🏢 Departamento", "📍 Zona", "📝 Actividad", "📊 Estado", "📷 Fotos", "🔄 Reiniciar todo", "↩️ Volver"],
+    "editar_proyecto": [],
     "editar_fotos": ["🗑️ Borrar fotos", "➕ Agregar fotos", "↩️ Volver"],
     "editar_estado": CATALOGO_ESTADO_REPORTE,
     "continuar_pendiente_estado": CATALOGO_ESTADO_REPORTE,
 }
 
 
-def _obtener_opciones(esperando: str | None) -> list[str]:
+def _obtener_opciones(esperando: str | None, tecnico: str | None = None) -> list[str]:
     if not esperando:
         return []
+    if esperando in ("proyecto", "editar_proyecto"):
+        try:
+            return db.listar_nombres_proyectos()
+        except Exception:
+            return ["Mina San Dimas", "Proyectos Durango"]
     if esperando in ("departamento", "editar_departamento"):
         try:
             return db.listar_departamentos()
         except Exception:
             return ["Infraestructura"]
     if esperando in ("ubicacion", "editar_zona"):
+        proy = None
+        if tecnico:
+            proy = get_estado(tecnico).borrador.get("proyecto")
         try:
-            return db.listar_zonas() + ["Otra"]
+            return db.listar_zonas(proyecto=proy) + ["Otra"]
         except Exception:
             return CATALOGO_UBICACION + ["Otra"]
     return CATALOGOS_POR_ESTADO.get(esperando, [])
@@ -147,10 +157,10 @@ def listar_tecnicos():
 
 
 @app.get("/api/exportar-excel")
-def exportar_excel(request: Request, desde: str = "", hasta: str = ""):
+def exportar_excel(request: Request, desde: str = "", hasta: str = "", proyecto: str = ""):
     """Descarga el reporte en Excel del periodo `desde`–`hasta` (YYYY-MM-DD,
-    ambos inclusive). Sin fechas, usa la semana calendario actual. Protegido
-    con REPORTE_ADMIN_SECRET."""
+    ambos inclusive), opcionalmente filtrado por proyecto (Mina o Durango).
+    Sin fechas, usa la semana actual. Protegido con REPORTE_ADMIN_SECRET."""
     if not _admin_autorizado(request, ""):
         return JSONResponse(**_PROHIBIDO)
     try:
@@ -161,7 +171,13 @@ def exportar_excel(request: Request, desde: str = "", hasta: str = ""):
             content={"status": "error", "detalle": "Fechas inválidas. Usa desde=YYYY-MM-DD&hasta=YYYY-MM-DD."},
         )
     try:
-        contenido, nombre = excel.generar_excel(db.reportes_en_periodo(inicio, fin), inicio, fin)
+        if proyecto and proyecto.strip():
+            proy_filtro = proyecto.strip()
+            reportes = db.reportes_en_periodo(inicio, fin, proyecto=proy_filtro)
+            contenido, nombre = excel.generar_excel(reportes, inicio, fin, proyecto=proy_filtro)
+        else:
+            reportes = db.reportes_en_periodo(inicio, fin)
+            contenido, nombre = excel.generar_excel(reportes, inicio, fin)
     except Exception as e:
         print(f"[exportar-excel] error: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "detalle": str(e)})
@@ -236,7 +252,7 @@ def chat(mensaje: MensajeIn):
         }
     respuestas = procesar_mensaje_web(mensaje.tecnico, mensaje.texto)
     estado = get_estado(mensaje.tecnico)
-    opciones = _obtener_opciones(estado.esperando)
+    opciones = _obtener_opciones(estado.esperando, tecnico=mensaje.tecnico)
     es_admin = db.es_admin(mensaje.tecnico)
     return {
         "respuestas": respuestas,
@@ -316,13 +332,16 @@ def _manejar_foto(message: dict):
             tg.send_text(chat_id, "El archivo no es una imagen válida.", es_admin=es_admin)
             return
 
-        # Aplicar marca de agua con datos del reporte
+        # Aplicar marca de agua con datos del reporte (incluyendo Proyecto si existe)
         try:
+            proy = estado.borrador.get("proyecto", "")
+            zona = estado.borrador.get("ubicacion", "")
+            zona_wm = f"{proy} - {zona}".strip(" -")
             contenido_procesado = aplicar_marca_de_agua(
                 contenido,
                 ticket=estado.borrador.get("ticket"),
                 tecnico=tecnico,
-                zona=estado.borrador.get("ubicacion"),
+                zona=zona_wm,
             )
         except Exception as err_wm:
             print(f"[evidencia] advertencia aplicando marca de agua: {err_wm}")
@@ -375,6 +394,12 @@ def _manejar_mensaje(message: dict):
     if comando == "/nuevo_tecnico":
         _admin_nuevo_tecnico(chat_id, tecnico, texto)
         return
+    if comando in ("/nuevo_proyecto", "/nuevoproyecto"):
+        _admin_nuevo_proyecto(chat_id, tecnico, texto)
+        return
+    if comando in ("/proyectos", "/proyecto") or bot_logic._remover_acentos(texto) in ("proyectos", "proyecto", "ver proyectos"):
+        _admin_listar_proyectos(chat_id, tecnico, texto)
+        return
     if comando in ("/nuevo_departamento", "/nuevodepartamento"):
         _admin_nuevo_departamento(chat_id, tecnico, texto)
         return
@@ -397,7 +422,7 @@ def _manejar_mensaje(message: dict):
         tg.send_text(chat_id, r, con_teclado=False)
 
     esperando = get_estado(tecnico).esperando
-    opciones = _obtener_opciones(esperando)
+    opciones = _obtener_opciones(esperando, tecnico=tecnico)
     if opciones:
         tg.send_opciones(chat_id, respuestas[-1], opciones)
     elif esperando:
@@ -471,31 +496,46 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
 
 
 def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):
-    """/reporte → semana actual; /reporte AAAA-MM-DD AAAA-MM-DD → ese periodo."""
+    """/reporte → semana actual; /reporte [AAAA-MM-DD AAAA-MM-DD] [Proyecto] → ese periodo/proyecto."""
     if not db.es_admin(tecnico):
         tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
         return
     partes = texto.split()[1:] if texto.split()[0].lower() == "/reporte" else []
+    proyecto_filtro = None
     try:
-        if len(partes) not in (0, 2):
+        if len(partes) == 0:
+            inicio, fin = _periodo()
+        elif len(partes) == 1:
+            inicio, fin = _periodo()
+            proyecto_filtro = partes[0]
+        elif len(partes) == 2:
+            inicio, fin = _periodo(partes[0], partes[1])
+        elif len(partes) >= 3:
+            inicio, fin = _periodo(partes[0], partes[1])
+            proyecto_filtro = " ".join(partes[2:])
+        else:
             raise ValueError
-        inicio, fin = _periodo(*partes)
     except ValueError:
-        tg.send_text(chat_id, "Usa: /reporte  o  /reporte AAAA-MM-DD AAAA-MM-DD", es_admin=True)
+        tg.send_text(chat_id, "Usa: /reporte  o  /reporte AAAA-MM-DD AAAA-MM-DD [Proyecto]", es_admin=True)
         return
 
-    tg.send_text(chat_id, f"Generando Excel del {inicio.isoformat()} al {fin.isoformat()}…", con_teclado=False)
+    txt_proy = f" ({proyecto_filtro})" if proyecto_filtro else " (Consolidado)"
+    tg.send_text(chat_id, f"Generando Excel del {inicio.isoformat()} al {fin.isoformat()}{txt_proy}…", con_teclado=False)
     try:
-        reportes = db.reportes_en_periodo(inicio, fin)
-        contenido, nombre = excel.generar_excel(reportes, inicio, fin)
+        if proyecto_filtro:
+            reportes = db.reportes_en_periodo(inicio, fin, proyecto=proyecto_filtro)
+            contenido, nombre = excel.generar_excel(reportes, inicio, fin, proyecto=proyecto_filtro)
+        else:
+            reportes = db.reportes_en_periodo(inicio, fin)
+            contenido, nombre = excel.generar_excel(reportes, inicio, fin)
     except Exception as e:
         print(f"[exportar_excel] error: {e}")
         tg.send_text(chat_id, "No pude generar el Excel. Intenta más tarde.", es_admin=True)
         return
     tg.send_document(
         chat_id, contenido, nombre,
-        caption=f"📊 {len(reportes)} reporte(s) del {inicio.isoformat()} al {fin.isoformat()}.\n"
-                f"Otro periodo: /reporte AAAA-MM-DD AAAA-MM-DD",
+        caption=f"📊 {len(reportes)} reporte(s) del {inicio.isoformat()} al {fin.isoformat()}{txt_proy}.\n"
+                f"Otro periodo: /reporte AAAA-MM-DD AAAA-MM-DD [Proyecto]",
         mime_type=MIME_XLSX,
     )
 
@@ -560,3 +600,56 @@ def _admin_listar_departamentos(chat_id: int, tecnico: str):
         return
     texto = "🏢 *Departamentos disponibles:*\n\n" + ("\n".join(f"{i}. {n}" for i, n in enumerate(nombres, 1)) or "No hay departamentos registrados.")
     tg.send_opciones(chat_id, texto, ["➕ Nuevo departamento", "➕ Nuevo reporte", "❌ Cancelar"])
+
+
+def _admin_nuevo_proyecto(chat_id: int, tecnico: str, texto: str):
+    if not db.es_admin(tecnico):
+        tg.send_text(chat_id, "No tienes permiso para crear proyectos.", con_teclado=False)
+        return
+    partes_str = texto.removeprefix("/nuevo_proyecto").removeprefix("/nuevoproyecto").strip()
+    if not partes_str:
+        get_estado(tecnico).esperando = "admin_nombre_proyecto"
+        tg.send_opciones(
+            chat_id,
+            "🏗️ Escribe el nombre del nuevo proyecto y sus datos:\n`<Nombre> | <Tipo: Mina o Durango> | <Cliente>`\n(o Cancelar):",
+            ["❌ Cancelar"],
+        )
+        return
+    campos = [c.strip() for c in partes_str.split("|")]
+    nombre = campos[0]
+    tipo = campos[1] if len(campos) > 1 else "Durango"
+    cliente = campos[2] if len(campos) > 2 else ""
+    try:
+        creado = db.agregar_proyecto(nombre, tipo=tipo, cliente=cliente)
+    except Exception as e:
+        print(f"[nuevo_proyecto] error: {e}")
+        tg.send_text(chat_id, "No pude crear el proyecto. Intenta más tarde.", es_admin=True)
+        return
+    tg.send_text(chat_id, (f"✅ Proyecto creado: *{nombre}* ({tipo})" if creado else f"El proyecto *{nombre}* ya existe o es inválido."), es_admin=True)
+
+
+def _admin_listar_proyectos(chat_id: int, tecnico: str, texto: str):
+    try:
+        partes = texto.split(maxsplit=1)
+        filtro = partes[1].strip() if len(partes) > 1 and not partes[0].lower().startswith("/proyectos") else ""
+        if filtro:
+            reportes = db.reportes_en_periodo(dt.date(2020, 1, 1), dt.date(2030, 1, 1), proyecto=filtro)
+            if not reportes:
+                tg.send_text(chat_id, f"🔍 No se encontraron reportes para el proyecto: *{filtro}*", es_admin=True)
+                return
+            lineas = [f"🏗️ *Reportes recientes en {filtro}:*"]
+            for r in reportes[-10:]:
+                lineas.append(f"• *{r['numero']}* [{r['estado']}] | Ticket: {r['ticket']} — {r['ubicacion']}: {r['actividad']} ({r['fecha']})")
+            tg.send_text(chat_id, "\n".join(lineas), es_admin=True)
+            return
+
+        proyectos = db.listar_proyectos()
+        lineas = ["🏗️ *Proyectos y Sedes registradas:*"]
+        for p in proyectos:
+            cli = f" (Cliente: {p['cliente']})" if p.get("cliente") else ""
+            lineas.append(f"• *{p['nombre']}* — Tipo: {p.get('tipo', 'General')}{cli}")
+        lineas.append("\nPara agregar otro proyecto:\n`/nuevo_proyecto <Nombre> | <Tipo: Mina o Durango> | <Cliente>`")
+        tg.send_opciones(chat_id, "\n".join(lineas), ["➕ Nuevo reporte", "❌ Cancelar"])
+    except Exception as e:
+        print(f"[proyectos] error: {e}")
+        tg.send_text(chat_id, "No pude consultar los proyectos.", es_admin=True)

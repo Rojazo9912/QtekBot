@@ -1,26 +1,31 @@
-# FieldTI — Reporte de Campo Ágil para Mina (QtekBot)
+# FieldTI — Reporte de Campo Ágil para Mina y Proyectos Durango (QtekBot)
 
-Bot de Telegram para el registro de actividades en campo para minería en tiempo real. Los reportes se guardan en **Supabase Postgres**, las fotos de evidencia en **Supabase Storage**, y el admin descarga el reporte del periodo en **Excel** cuando lo necesita.
+Bot de Telegram para el registro de actividades en campo en tiempo real, con soporte bivalente para **Operación Minera** (Mina San Dimas / First Majestic) y **Proyectos Locales en Durango** (Qtek Computación / Clientes Corporativos). Los reportes se guardan en **Supabase Postgres**, las fotos de evidencia en **Supabase Storage**, y el admin descarga el reporte en **Excel** con carátulas y resúmenes diferenciados por proyecto o consolidado.
 
-> 📄 **Documentación oficial del PRD:** Consulta el archivo [`PRD.md`](PRD.md) para revisar las especificaciones de la **Versión 1.1** del piloto.
+> 📄 **Migración de Base de Datos:** Para actualizar tu base de datos de Supabase existente a la versión multi-proyecto, ejecuta el script [`supabase/migration_v3_proyectos_mina_durango.sql`](supabase/migration_v3_proyectos_mina_durango.sql) en el Editor SQL de Supabase.
 
 ## 🚀 Características y Flujo Principal
 
-1. **Flujo de Registro en 7 Pasos**:
-   - 🎫 **Ticket**: Número de ticket u orden de trabajo (obligatorio, texto libre o `Sin ticket`).
-   - 🏢 **Departamento**: Selección dinámica por catálogo de Supabase (ej. `Infraestructura`, `Mantenimiento`).
-   - 📍 **Zona / Ubicación**: Selección dinámica (`Nivel 10`, `Nivel 11`, `Nivel 12`, `Otra`). Si se ingresa una nueva zona, se da de alta automáticamente.
+1. **Flujo de Registro en 8 Pasos**:
+   - 🏗️ **Proyecto / Sede**: Selección del proyecto (`⛏️ Mina San Dimas`, `🏙️ Proyectos Durango`, o proyectos adicionales dados de alta).
+   - 🎫 **Ticket**: Número de ticket u orden de trabajo (texto libre o `Sin ticket` con generación automática `S/T-XXXX`).
+   - 🏢 **Departamento**: Selección dinámica por catálogo de Supabase (ej. `Infraestructura`, `Sistemas`, `Redes`).
+   - 📍 **Zona / Ubicación**: Catálogo inteligente **filtrado según el proyecto seleccionado** (ej. Mina: `Nivel 10`, `Nivel 11`, `Planta Beneficio`; Durango: `Oficinas Centrales`, `Taller Qtek`, `Site Corporativo`, `Otra`).
    - 📝 **Actividad**: Descripción de la actividad realizada.
    - 📊 **Estado**: Estado final (`Terminado`, `Pendiente`, `No solucionado`).
-   - 📷 **Evidencia**: Carga opcional de una o varias fotos (validadas como imágenes reales, máx 10 MB).
+   - 📷 **Evidencia**: Carga opcional de fotos con marca de agua automática (ticket, técnico, zona, proyecto, fecha/hora).
    - 📋 **Confirmación Interactiva**: Resumen completo previo al guardado con opciones `✅ Guardar`, `✏️ Editar`, `❌ Cancelar`.
-2. **Gestión de Pendientes**: Consulta de reportes pendientes con opción de continuar anexando actualizaciones con marca de tiempo.
-3. **Gestión de Departamentos** (solo admin): comandos `/nuevo_departamento Nombre` y `/departamentos`.
-4. **Exportación a Excel** (solo admin): botón `📊 Exportar Excel` o `/reporte AAAA-MM-DD AAAA-MM-DD`. El archivo trae tres hojas:
-   - **Resumen**: datos del contrato, periodo y totales por estado, departamento y ubicación.
-   - **Reportes**: una fila por reporte con su departamento correspondiente y filtros.
-   - **Evidencias**: una fila por foto, con su link y miniaturas.
-5. **Generación Automática**: Número de reporte (`#001`, `#002`...), técnico (por sesión de Telegram), fecha y hora en zona horaria local (`America/Mexico_City`).
+2. **Registro Rápido One-Shot**:
+   - `/registro <Proyecto> | <Ticket> | <Depto> | <Zona> | <Actividad> | <Estado>` (soporta tanto formato completo de 6 campos como formato legacy de 4-5 campos asumiendo Mina).
+3. **Gestión de Proyectos y Sedes**:
+   - `/proyectos`: Listado de proyectos y sedes activas, o `/proyecto <nombre>` para buscar actividades de un proyecto.
+   - `/nuevo_proyecto Nombre | Tipo (Mina o Durango) | Cliente`: Alta dinámica de nuevos proyectos (solo admin).
+4. **Gestión de Pendientes**: Consulta de reportes pendientes con opción de continuar anexando actualizaciones con marca de tiempo.
+5. **Exportación a Excel Especializada**:
+   - Carátula institucional automática según proyecto: **First Majestic** para Mina San Dimas, **Qtek Computación** para Durango, o reporte consolidado.
+   - Hoja **Resumen**: Desglose con tabla de métricas por Proyecto, Estado, Departamento y Ubicación.
+   - Hoja **Reportes**: Columna dedicada `Proyecto`.
+   - Hoja **Evidencias**: Vínculos y miniaturas de fotos de evidencias.
 
 ---
 

@@ -60,48 +60,56 @@ class TestBotLogicPRDv11(unittest.TestCase):
     def test_flujo_completo_7_pasos(self, mock_crear):
         estado = get_estado("TecnicoEstandar")
 
-        # 1. Inicio -> Pide ticket
+        # 1. Inicio -> Pide proyecto / sede
         resp1 = procesar_mensaje_web("TecnicoEstandar", "➕ Nuevo reporte")
-        self.assertEqual(estado.esperando, "ticket")
+        self.assertEqual(estado.esperando, "proyecto")
         self.assertIn("paso 1", resp1[0].lower())
+        self.assertIn("mina san dimas", resp1[0].lower())
 
-        # 2. Enviar Ticket -> Pide Departamento
+        # 2. Enviar Proyecto -> Pide Ticket
+        resp_p = procesar_mensaje_web("TecnicoEstandar", "Mina San Dimas")
+        self.assertEqual(estado.esperando, "ticket")
+        self.assertEqual(estado.borrador["proyecto"], "Mina San Dimas")
+        self.assertIn("paso 2", resp_p[0].lower())
+
+        # 3. Enviar Ticket -> Pide Departamento
         resp2 = procesar_mensaje_web("TecnicoEstandar", "TK-9988")
         self.assertEqual(estado.esperando, "departamento")
         self.assertEqual(estado.borrador["ticket"], "TK-9988")
-        self.assertIn("paso 2", resp2[0].lower())
+        self.assertIn("paso 3", resp2[0].lower())
 
-        # 3. Enviar Departamento -> Pide Ubicación / Zona
+        # 4. Enviar Departamento -> Pide Ubicación / Zona
         resp3 = procesar_mensaje_web("TecnicoEstandar", "Infraestructura")
         self.assertEqual(estado.esperando, "ubicacion")
         self.assertEqual(estado.borrador["departamento"], "Infraestructura")
-        self.assertIn("paso 3", resp3[0].lower())
+        self.assertIn("paso 4", resp3[0].lower())
 
-        # 4. Enviar Ubicación -> Pide Actividad
+        # 5. Enviar Ubicación -> Pide Actividad
         resp4 = procesar_mensaje_web("TecnicoEstandar", "Nivel 10")
         self.assertEqual(estado.esperando, "actividad")
         self.assertEqual(estado.borrador["ubicacion"], "Nivel 10")
-        self.assertIn("paso 4", resp4[0].lower())
+        self.assertIn("paso 5", resp4[0].lower())
 
-        # 5. Enviar Actividad -> Pide Estado
+        # 6. Enviar Actividad -> Pide Estado
         resp5 = procesar_mensaje_web("TecnicoEstandar", "Mantenimiento a Leaky Feeder")
         self.assertEqual(estado.esperando, "estado")
         self.assertEqual(estado.borrador["actividad"], "Mantenimiento a Leaky Feeder")
-        self.assertIn("paso 5", resp5[0].lower())
+        self.assertIn("paso 6", resp5[0].lower())
 
-        # 6. Enviar Estado -> Pide Evidencia
+        # 7. Enviar Estado -> Pide Evidencia
         resp6 = procesar_mensaje_web("TecnicoEstandar", "Terminado")
         self.assertEqual(estado.esperando, "evidencia")
         self.assertEqual(estado.borrador["estado"], "Terminado")
-        self.assertIn("paso 6", resp6[0].lower())
+        self.assertIn("paso 7", resp6[0].lower())
 
-        # 7. Omitir Evidencia -> Pide Confirmación
+        # 8. Omitir Evidencia -> Pide Confirmación
         resp7 = procesar_mensaje_web("TecnicoEstandar", "Omitir")
         self.assertEqual(estado.esperando, "confirmacion")
         self.assertIn("confirmación", resp7[0].lower())
         self.assertIn("Infraestructura", resp7[0])
+        self.assertIn("Mina San Dimas", resp7[0])
 
-        # 8. Guardar -> Llama a db.crear_reporte y confirma con #001
+        # 9. Guardar -> Llama a db.crear_reporte y confirma con #001
         resp8 = procesar_mensaje_web("TecnicoEstandar", "Guardar")
         self.assertIsNone(estado.esperando)
         self.assertEqual(estado.borrador, {})
@@ -113,9 +121,11 @@ class TestBotLogicPRDv11(unittest.TestCase):
             estado="Terminado",
             departamento="Infraestructura",
             evidencias=[],
+            proyecto="Mina San Dimas",
         )
         self.assertIn("#001", resp8[0])
         self.assertIn("• *Departamento:* Infraestructura", resp8[0])
+        self.assertIn("• *Proyecto:* Mina San Dimas", resp8[0])
 
     def test_generar_ticket_temporal(self):
         t = generar_ticket_temporal()
@@ -142,54 +152,61 @@ class TestBotLogicPRDv11(unittest.TestCase):
     def test_flujo_sin_ticket_guardado_completo(self, mock_crear):
         estado = get_estado("TecnicoEstandar")
 
-        # 1. Inicio -> Pide ticket (con opción Sin ticket)
+        # 1. Inicio -> Pide proyecto / sede
         resp1 = procesar_mensaje_web("TecnicoEstandar", "➕ Nuevo reporte")
-        self.assertEqual(estado.esperando, "ticket")
-        self.assertIn("sin ticket", resp1[0].lower())
+        self.assertEqual(estado.esperando, "proyecto")
+        self.assertIn("paso 1", resp1[0].lower())
 
-        # 2. Responde 'Sin ticket' -> asigna ticket temporal y pide Departamento
+        # 2. Proyecto -> Pide ticket (con opción Sin ticket)
+        resp_p = procesar_mensaje_web("TecnicoEstandar", "Proyectos Durango")
+        self.assertEqual(estado.esperando, "ticket")
+        self.assertIn("sin ticket", resp_p[0].lower())
+
+        # 3. Responde 'Sin ticket' -> asigna ticket temporal y pide Departamento
         resp2 = procesar_mensaje_web("TecnicoEstandar", "Sin ticket")
         self.assertEqual(estado.esperando, "departamento")
         ticket_asignado = estado.borrador["ticket"]
         self.assertTrue(ticket_asignado.startswith("S/T-"))
         self.assertIn("ticket temporal", resp2[0].lower())
-        self.assertIn("paso 2", resp2[1].lower())
+        self.assertIn("paso 3", resp2[1].lower())
 
-        # 3. Departamento -> Ubicación
+        # 4. Departamento -> Ubicación
         resp3 = procesar_mensaje_web("TecnicoEstandar", "Infraestructura")
         self.assertEqual(estado.esperando, "ubicacion")
-        self.assertIn("paso 3", resp3[0].lower())
+        self.assertIn("paso 4", resp3[0].lower())
 
-        # 4. Ubicación -> Actividad
-        procesar_mensaje_web("TecnicoEstandar", "Nivel 11")
+        # 5. Ubicación -> Actividad
+        procesar_mensaje_web("TecnicoEstandar", "Oficinas Centrales")
         self.assertEqual(estado.esperando, "actividad")
 
-        # 5. Actividad -> Estado
+        # 6. Actividad -> Estado
         procesar_mensaje_web("TecnicoEstandar", "Revisión de radio")
         self.assertEqual(estado.esperando, "estado")
 
-        # 6. Estado -> Evidencia
+        # 7. Estado -> Evidencia
         procesar_mensaje_web("TecnicoEstandar", "Terminado")
         self.assertEqual(estado.esperando, "evidencia")
 
-        # 7. Omitir Evidencia -> Confirmación
+        # 8. Omitir Evidencia -> Confirmación
         resp_conf = procesar_mensaje_web("TecnicoEstandar", "Omitir")
         self.assertEqual(estado.esperando, "confirmacion")
         self.assertIn(ticket_asignado, resp_conf[0])
         self.assertIn("Infraestructura", resp_conf[0])
+        self.assertIn("Proyectos Durango", resp_conf[0])
 
-        # 8. Guardar -> db.crear_reporte con el ticket temporal generado
+        # 9. Guardar -> db.crear_reporte con el ticket temporal generado y proyecto
         resp_guardar = procesar_mensaje_web("TecnicoEstandar", "Guardar")
         self.assertIsNone(estado.esperando)
         self.assertEqual(estado.borrador, {})
         mock_crear.assert_called_once_with(
             ticket=ticket_asignado,
             tecnico="TecnicoEstandar",
-            ubicacion="Nivel 11",
+            ubicacion="Oficinas Centrales",
             actividad="Revisión de radio",
             estado="Terminado",
             departamento="Infraestructura",
             evidencias=[],
+            proyecto="Proyectos Durango",
         )
         self.assertIn("#002", resp_guardar[0])
 
@@ -722,6 +739,101 @@ class TestComandoReporteTelegram(unittest.TestCase):
         self.assertTrue(nombre.endswith(".zip"))
         self.assertGreater(len(zip_bytes), 0)
 
+    @patch("app.db.crear_reporte", return_value="#099")
+    def test_registro_rapido_con_proyecto_durango(self, mock_crear):
+        resp = procesar_mensaje_web(
+            "TecnicoEstandar",
+            "/registro Proyectos Durango | TK-500 | Sistemas | Oficinas Centrales | Instalación Switch | Terminado"
+        )
+        self.assertIn("confirmación", resp[0].lower())
+        self.assertIn("Proyectos Durango", resp[0])
+        resp_g = procesar_mensaje_web("TecnicoEstandar", "Guardar")
+        self.assertIn("#099", resp_g[0])
+        mock_crear.assert_called_once_with(
+            ticket="TK-500",
+            tecnico="TecnicoEstandar",
+            ubicacion="Oficinas Centrales",
+            actividad="Instalación Switch",
+            estado="Terminado",
+            departamento="Sistemas",
+            evidencias=[],
+            proyecto="Proyectos Durango",
+        )
+
+    @patch("app.db.crear_reporte", return_value="#100")
+    def test_registro_rapido_retrocompatibilidad_sin_proyecto(self, mock_crear):
+        resp = procesar_mensaje_web(
+            "TecnicoEstandar",
+            "/registro TK-100 | Redes | Nivel 10 | Cambio AP | Terminado"
+        )
+        self.assertIn("confirmación", resp[0].lower())
+        self.assertIn("Mina San Dimas", resp[0])
+        resp_g = procesar_mensaje_web("TecnicoEstandar", "Guardar")
+        self.assertIn("#100", resp_g[0])
+        mock_crear.assert_called_once_with(
+            ticket="TK-100",
+            tecnico="TecnicoEstandar",
+            ubicacion="Nivel 10",
+            actividad="Cambio AP",
+            estado="Terminado",
+            departamento="Redes",
+            evidencias=[],
+            proyecto="Mina San Dimas",
+        )
+
+    @patch("app.db.listar_proyectos")
+    def test_comando_proyectos_lista(self, mock_proy):
+        mock_proy.return_value = [
+            {"nombre": "Mina San Dimas", "tipo": "Mina", "cliente": "First Majestic"},
+            {"nombre": "Proyectos Durango", "tipo": "Durango", "cliente": "Qtek Computación"},
+        ]
+        resp = procesar_mensaje_web("TecnicoEstandar", "/proyectos")
+        self.assertIn("Mina San Dimas", resp[0])
+        self.assertIn("Proyectos Durango", resp[0])
+
+    @patch("app.db.agregar_proyecto", return_value=True)
+    def test_comando_nuevo_proyecto_admin(self, mock_add):
+        resp = procesar_mensaje_web(
+            "Miguel Abraham Lopez Ortiz",
+            "/nuevo_proyecto Planta Durango | Durango | Qtek S.A."
+        )
+        mock_add.assert_called_once_with(
+            nombre="Planta Durango",
+            tipo="Durango",
+            cliente="Qtek S.A."
+        )
+        self.assertIn("guardado correctamente", resp[0].lower())
+
+    def test_excel_soporte_columna_proyecto(self):
+        from app.excel import generar_excel
+        reportes = [
+            {
+                "id": 1,
+                "numero": "#001",
+                "ticket": "TK-01",
+                "tecnico": "Juan",
+                "departamento": "Sistemas",
+                "ubicacion": "Oficinas Centrales",
+                "actividad": "Instalación",
+                "estado": "Terminado",
+                "evidencias": [],
+                "fecha": "2026-10-20",
+                "hora": "10:00",
+                "actualizado": "2026-10-20 10:00:00",
+                "proyecto": "Proyectos Durango",
+            }
+        ]
+        wb_bytes, _ = generar_excel(reportes, dt.date(2026, 10, 20), dt.date(2026, 10, 20), proyecto="Proyectos Durango")
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(wb_bytes))
+        ws_rep = wb["Reportes"]
+        self.assertEqual(ws_rep["L1"].value, "Proyecto")
+        self.assertEqual(ws_rep["L2"].value, "Proyectos Durango")
+        ws_resumen = wb["Resumen"]
+        texto_caratula = " ".join(str(ws_resumen.cell(row=r, column=2).value) for r in range(1, 10))
+        self.assertIn("Qtek Computación", texto_caratula)
+
 
 if __name__ == "__main__":
     unittest.main()
+

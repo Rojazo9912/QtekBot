@@ -39,21 +39,62 @@ TECNICOS_INFO = {
 # que se edita aquí (código + redeploy) en vez de ser auto-servicio.
 ADMIN_TECNICOS = ["Miguel Abraham Lopez Ortiz"]
 
-# Ubicaciones y Estados definidos en el PRD v1.1
+# Proyectos y Sedes soportadas
+CATALOGO_PROYECTOS = ["Mina San Dimas", "Proyectos Durango"]
+
+PROYECTOS_INICIALES = [
+    {"nombre": "Mina San Dimas", "tipo": "Mina", "cliente": "First Majestic"},
+    {"nombre": "Proyectos Durango", "tipo": "Durango", "cliente": "Qtek Computación"},
+]
+
+# Zonas sugeridas por proyecto
+ZONAS_POR_PROYECTO = {
+    "Mina San Dimas": ["Nivel 10", "Nivel 11", "Nivel 12", "Planta de Beneficio", "Superficie", "Campamento"],
+    "Proyectos Durango": ["Oficinas Qtek", "Soporte en Sitio", "Infraestructura Redes", "Cliente Corporativo"],
+}
+
+# Ubicaciones y Estados definidos
 CATALOGO_UBICACION = ["Nivel 10", "Nivel 11", "Nivel 12", "Otra"]
 CATALOGO_ESTADO_REPORTE = ["Terminado", "Pendiente", "No solucionado"]
 
-# Datos fijos del contrato, para la hoja "Resumen" del Excel exportado.
-# Edítalos si cambia el contrato, el director general o los representantes.
-CONTRATO_INFO = {
+# Contrato y Carátula para Mina (San Dimas / First Majestic)
+CONTRATO_INFO_MINA = {
     "contrato_marco_no": "FMS-FM-C1665",
     "orden_compra_no": "N/A",
     "contratista": "Qtek Computación, S.A. de C.V.",
-    "ubicacion_servicios": "Unidad San Dimas",
+    "ubicacion_servicios": "Unidad San Dimas (Mina)",
     "responsable_reporte_qtek": "Soporte Técnico TI",
-    "representante_first_majestic": "Erick Andrade Ovalle",
+    "representante_cliente": "Erick Andrade Ovalle (First Majestic)",
     "director_general_qtek": "Leobardo Simental Rueda",
-    "area_servicio": "Soporte TI",
+    "area_servicio": "Soporte TI Mina",
     "sub_plazo_correspondiente": "Soporte técnico correctivo y preventivo diario",
-    "descripcion_sub_plazo": "Atención de tickets de soporte TI conforme a demanda del área",
+    "descripcion_sub_plazo": "Atención de tickets de soporte TI conforme a demanda del área en mina",
 }
+
+# Contrato y Carátula para Proyectos Durango
+CONTRATO_INFO_DURANGO = {
+    "contrato_marco_no": "DGO-PROY-LOCALES",
+    "orden_compra_no": "N/A",
+    "contratista": "Qtek Computación, S.A. de C.V.",
+    "ubicacion_servicios": "Durango, Dgo. (Proyectos Locales)",
+    "responsable_reporte_qtek": "Soporte Técnico TI",
+    "representante_cliente": "Clientes / Proyectos Durango",
+    "director_general_qtek": "Leobardo Simental Rueda",
+    "area_servicio": "Soporte TI y Proyectos Durango",
+    "sub_plazo_correspondiente": "Atención y desarrollo de proyectos locales",
+    "descripcion_sub_plazo": "Servicios de soporte, infraestructura y proyectos de TI en Durango",
+}
+
+# Retrocompatibilidad
+CONTRATO_INFO = CONTRATO_INFO_MINA
+
+
+def obtener_info_contrato(proyecto: str | None = None) -> dict:
+    """Devuelve la configuración de carátula correspondiente según el proyecto."""
+    if not proyecto:
+        return CONTRATO_INFO_MINA
+    p_norm = proyecto.lower()
+    if "durango" in p_norm:
+        return CONTRATO_INFO_DURANGO
+    return CONTRATO_INFO_MINA
+

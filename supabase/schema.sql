@@ -14,6 +14,21 @@ create table if not exists tecnicos (
   creado            timestamptz not null default now()
 );
 
+create table if not exists proyectos (
+  id      bigint generated always as identity primary key,
+  nombre  text not null unique,
+  tipo    text not null default 'Mina' check (tipo in ('Mina', 'Durango')),
+  cliente text not null default '',
+  activo  boolean not null default true,
+  creado  timestamptz not null default now()
+);
+
+insert into proyectos (nombre, tipo, cliente)
+values 
+  ('Mina San Dimas', 'Mina', 'First Majestic'),
+  ('Proyectos Durango', 'Durango', 'Qtek Computación')
+on conflict (nombre) do nothing;
+
 create table if not exists departamentos (
   id     bigint generated always as identity primary key,
   nombre text not null unique,
@@ -22,18 +37,26 @@ create table if not exists departamentos (
 );
 
 create table if not exists zonas (
-  id     bigint generated always as identity primary key,
-  nombre text not null unique,
-  activo boolean not null default true,
-  creado timestamptz not null default now()
+  id          bigint generated always as identity primary key,
+  nombre      text not null unique,
+  proyecto    text not null default 'Mina San Dimas',
+  proyecto_id bigint references proyectos(id),
+  activo      boolean not null default true,
+  creado      timestamptz not null default now()
 );
 
 insert into departamentos (nombre)
 values ('Infraestructura')
 on conflict (nombre) do nothing;
 
-insert into zonas (nombre)
-values ('Nivel 10'), ('Nivel 11'), ('Nivel 12')
+insert into zonas (nombre, proyecto)
+values 
+  ('Nivel 10', 'Mina San Dimas'), 
+  ('Nivel 11', 'Mina San Dimas'), 
+  ('Nivel 12', 'Mina San Dimas'),
+  ('Oficinas Qtek', 'Proyectos Durango'),
+  ('Soporte en Sitio', 'Proyectos Durango'),
+  ('Infraestructura Redes', 'Proyectos Durango')
 on conflict (nombre) do nothing;
 
 create table if not exists reportes (
@@ -42,6 +65,8 @@ create table if not exists reportes (
   id              bigint generated always as identity primary key,
   ticket          text not null,
   tecnico         text not null references tecnicos (nombre) on update cascade,
+  proyecto        text not null default 'Mina San Dimas',
+  proyecto_id     bigint references proyectos(id),
   departamento    text not null default 'Infraestructura',
   departamento_id bigint references departamentos(id),
   ubicacion       text not null,
@@ -56,12 +81,15 @@ create table if not exists reportes (
 
 create index if not exists reportes_tecnico_estado_idx on reportes (tecnico, estado);
 create index if not exists reportes_creado_idx on reportes (creado);
+create index if not exists reportes_proyecto_idx on reportes (proyecto_id);
 create index if not exists reportes_departamento_idx on reportes (departamento_id);
 create index if not exists reportes_zona_idx on reportes (zona_id);
+create index if not exists zonas_proyecto_idx on zonas (proyecto_id);
 
 -- RLS activado y sin políticas: la "anon key" pública no puede leer ni
 -- escribir nada. El bot usa la "service_role key", que se salta RLS.
 alter table tecnicos enable row level security;
+alter table proyectos enable row level security;
 alter table departamentos enable row level security;
 alter table zonas enable row level security;
 alter table reportes enable row level security;
