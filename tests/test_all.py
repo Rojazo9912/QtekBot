@@ -845,6 +845,59 @@ class TestComandoReporteTelegram(unittest.TestCase):
         texto_caratula = " ".join(str(ws_resumen.cell(row=r, column=2).value) for r in range(1, 10))
         self.assertIn("Qtek Computación", texto_caratula)
 
+    @patch("app.db.obtener_proyectos_de_tecnico", return_value=["Mina San Dimas"])
+    def test_tecnico_con_un_solo_proyecto_asigna_automatico(self, mock_proy):
+        estado = get_estado("TecnicoMina")
+        resp = procesar_mensaje_web("TecnicoMina", "➕ Nuevo reporte")
+        self.assertEqual(estado.borrador.get("proyecto"), "Mina San Dimas")
+        self.assertEqual(estado.esperando, "ticket")
+        self.assertIn("Mina San Dimas", resp[0])
+        self.assertIn("paso 2", resp[0].lower())
+
+    @patch("app.db.obtener_proyectos_de_tecnico", return_value=["Proyectos Durango"])
+    @patch("app.db.listar_nombres_proyectos", return_value=["Mina San Dimas", "Proyectos Durango"])
+    def test_tecnico_no_puede_seleccionar_proyecto_no_asignado(self, mock_nombres, mock_proy):
+        estado = get_estado("TecnicoDurango")
+        estado.esperando = "proyecto"
+        resp = procesar_mensaje_web("TecnicoDurango", "Mina San Dimas")
+        self.assertIn("no tienes asignado", resp[0].lower())
+        self.assertEqual(estado.esperando, "proyecto")
+
+    @patch("app.db.asignar_proyecto_tecnico", return_value=True)
+    def test_admin_asigna_proyecto_a_tecnico(self, mock_asig):
+        resp = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "/asignar_proyecto Juan Pérez | Mina San Dimas")
+        mock_asig.assert_called_once_with("Juan Pérez", "Mina San Dimas")
+        self.assertIn("asignó el proyecto", resp[0].lower())
+
+    @patch("app.db.listar_tecnicos_con_info")
+    def test_admin_lista_tecnicos(self, mock_lista):
+        mock_lista.return_value = [
+            {"nombre": "Miguel Abraham Lopez Ortiz", "cargo": "Admin", "proyecto": "Ambos", "es_admin": True, "activo": True},
+            {"nombre": "Juan Pérez", "cargo": "Técnico", "proyecto": "Mina San Dimas", "es_admin": False, "activo": True},
+        ]
+        resp = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "/tecnicos")
+        mock_lista.assert_called_once()
+        self.assertIn("Juan Pérez", resp[0])
+        self.assertIn("Mina San Dimas", resp[0])
+
+    @patch("app.db.listar_tecnicos", return_value=["Juan Pérez", "Carlos Ruiz"])
+    @patch("app.db.listar_nombres_proyectos", return_value=["Mina San Dimas", "Proyectos Durango"])
+    @patch("app.db.asignar_proyecto_tecnico", return_value=True)
+    def test_admin_flujo_interactivo_asignar_proyecto(self, mock_asig, mock_proy, mock_tec):
+        estado = get_estado("Miguel Abraham Lopez Ortiz")
+        resp1 = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "👥 Asignar Proyecto")
+        self.assertEqual(estado.esperando, "admin_sel_tecnico_asignar")
+        self.assertIn("Juan Pérez", resp1[0])
+
+        resp2 = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "Juan Pérez")
+        self.assertEqual(estado.esperando, "admin_sel_proyecto_asignar")
+        self.assertIn("Mina San Dimas", resp2[0])
+
+        resp3 = procesar_mensaje_web("Miguel Abraham Lopez Ortiz", "Proyectos Durango")
+        self.assertIsNone(estado.esperando)
+        mock_asig.assert_called_once_with("Juan Pérez", "Proyectos Durango")
+        self.assertIn("asignó el proyecto", resp3[0].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

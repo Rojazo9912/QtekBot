@@ -113,15 +113,21 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
     # Flujo de Admin: Alta de nuevo técnico
     if estado.esperando == "admin_nombre_tecnico":
-        nombre_nuevo = texto_limpio
+        partes = [p.strip() for p in texto_limpio.split("|")]
+        nombre_nuevo = partes[0]
+        proyecto_nuevo = partes[1] if len(partes) > 1 else ""
         try:
-            codigo = db.agregar_tecnico(nombre_nuevo)
+            if proyecto_nuevo:
+                codigo = db.agregar_tecnico(nombre_nuevo, proyecto=proyecto_nuevo)
+            else:
+                codigo = db.agregar_tecnico(nombre_nuevo)
             estado.esperando = None
             if not codigo:
                 decir(f"El técnico {nombre_nuevo} ya estaba registrado en la lista de técnicos.")
             else:
+                proy_txt = f" (Sede/Proyecto: *{proyecto_nuevo}*)" if proyecto_nuevo and proyecto_nuevo != "Ambos" else " (Acceso a todos los proyectos)"
                 decir(
-                    f"✅ Técnico agregado: *{nombre_nuevo}*.\n\n"
+                    f"✅ Técnico agregado: *{nombre_nuevo}*{proy_txt}.\n\n"
                     f"Mándale este código para que active su cuenta:\n"
                     f"`/start {codigo}`"
                 )
@@ -166,6 +172,64 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             print(f"[admin] error registrando proyecto: {e}")
             decir("❌ No pude registrar el proyecto por un error con la base de datos.")
             estado.esperando = None
+        persistir_estado(tecnico)
+        return respuestas
+
+    # Flujo de Admin: Seleccionar técnico para asignarle proyecto
+    if estado.esperando == "admin_sel_tecnico_asignar":
+        try:
+            tecnicos_disponibles = db.listar_tecnicos()
+        except Exception:
+            tecnicos_disponibles = []
+        tec_encontrado = None
+        for t in tecnicos_disponibles:
+            if _remover_acentos(t).lower() == t_norm or t_norm in _remover_acentos(t).lower():
+                tec_encontrado = t
+                break
+        if not tec_encontrado:
+            tec_encontrado = texto_limpio
+
+        estado.borrador["tecnico_seleccionado"] = tec_encontrado
+        estado.esperando = "admin_sel_proyecto_asignar"
+        try:
+            proyectos = db.listar_nombres_proyectos() + ["Ambos"]
+        except Exception:
+            proyectos = ["Mina San Dimas", "Proyectos Durango", "Ambos"]
+        decir(
+            f"👤 Técnico seleccionado: *{tec_encontrado}*\n\n"
+            f"🏗️ *Selecciona a qué proyecto(s) tendrá acceso:*\n"
+            + "\n".join(f"• {p}" for p in proyectos)
+            + "\n\n(Pulsa una opción o escribe Cancelar):"
+        )
+        persistir_estado(tecnico)
+        return respuestas
+
+    # Flujo de Admin: Seleccionar proyecto para el técnico elegido
+    if estado.esperando == "admin_sel_proyecto_asignar":
+        tec_nom = estado.borrador.get("tecnico_seleccionado", "")
+        try:
+            proyectos_disponibles = db.listar_nombres_proyectos() + ["Ambos"]
+        except Exception:
+            proyectos_disponibles = ["Mina San Dimas", "Proyectos Durango", "Ambos"]
+        proy_encontrado = None
+        for p in proyectos_disponibles:
+            if _remover_acentos(p).lower() == t_norm or t_norm in _remover_acentos(p).lower():
+                proy_encontrado = p
+                break
+        if not proy_encontrado:
+            proy_encontrado = texto_limpio
+
+        try:
+            ok = db.asignar_proyecto_tecnico(tec_nom, proy_encontrado)
+            if ok:
+                decir(f"✅ Se asignó el proyecto *{proy_encontrado}* al técnico *{tec_nom}* correctamente.")
+            else:
+                decir(f"❌ No se pudo actualizar el técnico *{tec_nom}*. Verifica que el nombre esté registrado.")
+        except Exception as e:
+            print(f"[admin] error asignando proyecto: {e}")
+            decir("❌ Error de base de datos al asignar proyecto.")
+        estado.esperando = None
+        estado.borrador = {}
         persistir_estado(tecnico)
         return respuestas
 
@@ -313,14 +377,23 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         return respuestas
     # --- NAVEGACIÓN DEL MENÚ PRINCIPAL ---
     if t_norm in ("nuevo reporte", "+ nuevo reporte", "/nuevo_reporte", "nueva actividad", "+ nueva actividad", "/start"):
-        # Reiniciar borrador y comenzar Paso 1 (Proyecto o Sede)
         estado.borrador = {"evidencias": []}
-        estado.esperando = "proyecto"
-        proyectos = db.listar_nombres_proyectos()
-        decir(
-            "🏗️ *Paso 1 de 8 — Proyecto o Sede*\n\n"
-            "Selecciona el proyecto o centro de trabajo:\n" + "\n".join(f"• {p}" for p in proyectos)
-        )
+        proyectos = db.obtener_proyectos_de_tecnico(tecnico)
+        if len(proyectos) == 1:
+            estado.borrador["proyecto"] = proyectos[0]
+            estado.esperando = "ticket"
+            decir(
+                f"🏗️ *Proyecto:* {proyectos[0]}\n\n"
+                f"🎫 *Paso 2 de 8 — Ticket*\n\n"
+                f"Ingresa el número de ticket u orden de trabajo (ej. TK-001254).\n"
+                f"Si no cuentas con ticket, pulsa *'Sin ticket'* o escribe *'Sin ticket'*:"
+            )
+        else:
+            estado.esperando = "proyecto"
+            decir(
+                "🏗️ *Paso 1 de 8 — Proyecto o Sede*\n\n"
+                "Selecciona el proyecto o centro de trabajo:\n" + "\n".join(f"• {p}" for p in proyectos)
+            )
         persistir_estado(tecnico)
         return respuestas
 
@@ -354,13 +427,78 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
         decir("\n".join(lineas))
         return respuestas
 
-    if t_norm in ("nuevo tecnico", "+ nuevo tecnico", "/nuevo_tecnico", "dar de alta"):
+    if t_norm.startswith("/nuevo_tecnico") or t_norm in ("nuevo tecnico", "+ nuevo tecnico", "dar de alta"):
         if not es_admin:
             decir("No tienes permisos de administrador para agregar técnicos.")
             return respuestas
+        args = texto_limpio.removeprefix("/nuevo_tecnico").strip() if t_norm.startswith("/nuevo_tecnico") else ""
+        if args:
+            partes = [p.strip() for p in args.split("|")]
+            nombre_nuevo = partes[0]
+            proyecto_nuevo = partes[1] if len(partes) > 1 else "Ambos"
+            try:
+                codigo = db.agregar_tecnico(nombre_nuevo, proyecto=proyecto_nuevo)
+                if not codigo:
+                    decir(f"El técnico *{nombre_nuevo}* ya estaba registrado en la lista de técnicos.")
+                else:
+                    proy_txt = f" (Sede/Proyecto: *{proyecto_nuevo}*)" if proyecto_nuevo != "Ambos" else " (Acceso a todos los proyectos)"
+                    decir(
+                        f"✅ Técnico agregado: *{nombre_nuevo}*{proy_txt}.\n\n"
+                        f"Mándale este código para que active su cuenta:\n"
+                        f"`/start {codigo}`"
+                    )
+            except Exception as e:
+                print(f"[admin] error registrando técnico: {e}")
+                decir("❌ No pude registrar al técnico por un error con la base de datos.")
+            return respuestas
         estado.esperando = "admin_nombre_tecnico"
-        decir("👤 Escribe el Nombre Completo del nuevo técnico que deseas registrar:")
+        decir("👤 Escribe el Nombre del técnico y opcionalmente su sede:\n`Nombre Completo | Proyecto` (ej. `Juan Pérez | Mina San Dimas` o escribe Cancelar):")
         persistir_estado(tecnico)
+        return respuestas
+
+    if t_norm.startswith("/asignar_proyecto") or t_norm.startswith("/asignar_tecnico") or t_norm in ("asignar proyecto", "asignar proyectos", "/asignar_proyecto", "/asignar_tecnico"):
+        if not es_admin:
+            decir("No tienes permisos de administrador para asignar proyectos a técnicos.")
+            return respuestas
+        args = texto_limpio.removeprefix("/asignar_proyecto").removeprefix("/asignar_tecnico").strip() if t_norm.startswith("/asignar") else ""
+        if args and "|" in args:
+            tec_nom, proy_nom = [p.strip() for p in args.split("|", 1)]
+            if db.asignar_proyecto_tecnico(tec_nom, proy_nom):
+                decir(f"✅ Se asignó el proyecto *{proy_nom}* al técnico *{tec_nom}* correctamente.")
+            else:
+                decir(f"❌ No se pudo actualizar el técnico *{tec_nom}*. Verifica que el nombre esté registrado.")
+            return respuestas
+
+        try:
+            tecnicos = db.listar_tecnicos()
+        except Exception:
+            tecnicos = []
+        if not tecnicos:
+            decir("No hay técnicos registrados aún.")
+            return respuestas
+        estado.esperando = "admin_sel_tecnico_asignar"
+        estado.borrador = {}
+        decir(
+            "👥 *Asignar Proyecto a Técnico*\n\n"
+            "Selecciona el técnico al que deseas asignarle o cambiarle de proyecto:\n"
+            + "\n".join(f"• {t}" for t in tecnicos)
+            + "\n\n(Pulsa el botón de un técnico o escribe Cancelar):"
+        )
+        persistir_estado(tecnico)
+        return respuestas
+
+    if t_norm in ("tecnicos", "/tecnicos", "ver tecnicos", "listar tecnicos"):
+        if not es_admin:
+            decir("No tienes permisos de administrador para consultar la lista de técnicos.")
+            return respuestas
+        lista = db.listar_tecnicos_con_info()
+        lineas = ["👥 *Técnicos y Proyectos Asignados:*"]
+        for t in lista:
+            rol = "👑 Admin" if t.get("es_admin") else "👷 Técnico"
+            estado_cuenta = "✅ Activo" if t.get("activo") else "⏳ Pendiente código"
+            lineas.append(f"• *{t['nombre']}* ({rol})\n  🏗️ Proyecto: *{t.get('proyecto', 'Ambos')}* | {estado_cuenta}")
+        lineas.append("\nPara reasignar proyecto usa:\n`/asignar_proyecto <Técnico> | <Proyecto>`")
+        decir("\n".join(lineas))
         return respuestas
 
     if t_norm in ("departamentos", "departamento", "/departamentos", "/departamento", "ver departamentos"):
@@ -418,8 +556,9 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             "• *Cancelar*: Cancela el proceso actual.",
         ]
         if es_admin:
-            lineas.append("\n👑 *Comandos de Administrador:*")
             lineas.append("• *👤 + Nuevo técnico*: Genera código de activación para un técnico nuevo.")
+            lineas.append("• `/tecnicos`: Lista los técnicos y sus proyectos asignados.")
+            lineas.append("• `/asignar_proyecto Técnico | Proyecto`: Cambia la sede asignada a un técnico.")
             lineas.append("• `/nuevo_proyecto Nombre | Tipo | Cliente`: Registra un proyecto nuevo.")
             lineas.append("• `/nuevo_departamento Nombre`: Registra un departamento nuevo.")
             lineas.append("• `/departamentos`: Consulta los departamentos disponibles.")
@@ -433,14 +572,23 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
     # Paso 1: Proyecto / Sede
     if estado.esperando == "proyecto":
-        proyectos = db.listar_nombres_proyectos()
+        proyectos_autorizados = db.obtener_proyectos_de_tecnico(tecnico)
         proy_sel = None
-        for p in proyectos:
-            if t_norm and (_remover_acentos(p) == t_norm or t_norm in _remover_acentos(p)):
+        for p in proyectos_autorizados:
+            if t_norm and (_remover_acentos(p).lower() == t_norm or t_norm in _remover_acentos(p).lower()):
                 proy_sel = p
                 break
         if not proy_sel:
-            proy_sel = texto_limpio
+            todos_proyectos = db.listar_nombres_proyectos()
+            es_proyecto_existente = any(_remover_acentos(p).lower() == t_norm or t_norm in _remover_acentos(p).lower() for p in todos_proyectos)
+            if es_proyecto_existente and len(proyectos_autorizados) < len(todos_proyectos):
+                decir(
+                    f"⚠️ No tienes asignado ese proyecto. Tus proyectos autorizados son:\n"
+                    + "\n".join(f"• {p}" for p in proyectos_autorizados)
+                    + "\n\nSolicita a un administrador si requieres acceso a otro proyecto."
+                )
+                return respuestas
+            proy_sel = proyectos_autorizados[0] if len(proyectos_autorizados) == 1 else texto_limpio
 
         estado.borrador["proyecto"] = proy_sel
         estado.esperando = "ticket"

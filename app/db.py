@@ -105,7 +105,7 @@ def listar_tecnicos() -> list[str]:
 
 
 def agregar_tecnico(
-    nombre: str, cargo: str = "Técnico de Campo", imss: str = "N/A",
+    nombre: str, cargo: str = "Técnico de Campo", imss: str = "N/A", proyecto: str = "Ambos",
 ) -> Optional[str]:
     """Da de alta un técnico y regresa su código de activación. None si el
     nombre viene vacío o ya existe (sin distinguir mayúsculas)."""
@@ -115,10 +115,63 @@ def agregar_tecnico(
     if nombre.lower() in {n.lower() for n in listar_tecnicos()}:
         return None
     codigo = _generar_codigo_activacion()
-    _tabla_tecnicos().insert({
+    datos = {
         "nombre": nombre, "cargo": cargo, "imss": imss, "codigo_activacion": codigo,
-    }).execute()
+    }
+    if proyecto:
+        datos["proyecto"] = proyecto.strip()
+    _tabla_tecnicos().insert(datos).execute()
     return codigo
+
+
+def asignar_proyecto_tecnico(nombre: str, proyecto: str) -> bool:
+    """Asigna o actualiza el proyecto/sede de un técnico (Mina San Dimas, Proyectos Durango, Ambos)."""
+    try:
+        res = _tabla_tecnicos().update({"proyecto": proyecto.strip()}).ilike("nombre", nombre.strip()).execute()
+        return bool(res.data)
+    except Exception as e:
+        print(f"[db] error asignando proyecto a técnico {nombre}: {e}")
+        return False
+
+
+def obtener_proyectos_de_tecnico(tecnico: str) -> list[str]:
+    """Obtiene los proyectos que tiene autorizados un técnico para reportar.
+    Si tiene 'Ambos', 'Todos' o no está definido, retorna todos los proyectos activos."""
+    todos = listar_nombres_proyectos()
+    try:
+        res = _tabla_tecnicos().select("proyecto").ilike("nombre", tecnico.strip()).limit(1).execute()
+        if res.data:
+            proy_str = (res.data[0].get("proyecto") or "").strip()
+            if not proy_str or proy_str.lower() in ("ambos", "todos", "all"):
+                return todos
+            partes = [p.strip().lower() for p in proy_str.split(",") if p.strip()]
+            coincidentes = [t for t in todos if any(p in t.lower() or t.lower() in p for p in partes)]
+            if coincidentes:
+                return coincidentes
+    except Exception as e:
+        print(f"[db] error obteniendo proyectos de técnico {tecnico}: {e}")
+    return todos
+
+
+def listar_tecnicos_con_info() -> list[dict]:
+    """Lista técnicos con su cargo, proyecto asignado y estado de activación."""
+    try:
+        res = _tabla_tecnicos().select("nombre, cargo, proyecto, es_admin, chat_id").order("nombre").execute()
+        return [
+            {
+                "nombre": f["nombre"],
+                "cargo": f.get("cargo", "Técnico de Campo"),
+                "proyecto": f.get("proyecto") or "Ambos",
+                "es_admin": bool(f.get("es_admin")),
+                "activo": f.get("chat_id") is not None,
+            }
+            for f in res.data
+        ]
+    except Exception:
+        return [
+            {"nombre": n, "cargo": "Técnico de Campo", "proyecto": "Ambos", "es_admin": es_admin(n), "activo": True}
+            for n in listar_tecnicos()
+        ]
 
 
 def codigo_activacion_pendiente(nombre: str) -> Optional[str]:

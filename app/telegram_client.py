@@ -27,8 +27,9 @@ TECLADO_ACCIONES = {
 # Teclado persistente exclusivo para administradores
 TECLADO_ADMIN = {
     "keyboard": _FILAS_MENU + [
-        [{"text": "👤 + Nuevo técnico"}, {"text": "🏢 Departamentos"}],
-        [{"text": "🏗️ Proyectos"}, {"text": "📊 Exportar Excel"}],
+        [{"text": "👤 + Nuevo técnico"}, {"text": "👥 Asignar Proyecto"}],
+        [{"text": "🏢 Departamentos"}, {"text": "🏗️ Proyectos"}],
+        [{"text": "📊 Exportar Excel"}],
     ],
     "resize_keyboard": True,
 }
@@ -58,6 +59,11 @@ ALIAS_BOTONES = {
     "+ nuevo proyecto": "nuevo proyecto",
     "nuevo proyecto": "nuevo proyecto",
     "🏗️ + nuevo proyecto": "nuevo proyecto",
+    "asignar proyecto": "asignar proyecto",
+    "👥 asignar proyecto": "asignar proyecto",
+    "asignar técnico": "asignar proyecto",
+    "asignar tecnico": "asignar proyecto",
+    "/asignar_proyecto": "asignar proyecto",
 }
 
 

@@ -106,6 +106,8 @@ def _obtener_opciones(esperando: str | None, tecnico: str | None = None) -> list
         return []
     if esperando in ("proyecto", "editar_proyecto"):
         try:
+            if tecnico:
+                return db.obtener_proyectos_de_tecnico(tecnico)
             return db.listar_nombres_proyectos()
         except Exception:
             return ["Mina San Dimas", "Proyectos Durango"]
@@ -122,6 +124,16 @@ def _obtener_opciones(esperando: str | None, tecnico: str | None = None) -> list
             return db.listar_zonas(proyecto=proy) + ["Otra"]
         except Exception:
             return CATALOGO_UBICACION + ["Otra"]
+    if esperando == "admin_sel_tecnico_asignar":
+        try:
+            return db.listar_tecnicos() + ["❌ Cancelar"]
+        except Exception:
+            return ["❌ Cancelar"]
+    if esperando == "admin_sel_proyecto_asignar":
+        try:
+            return db.listar_nombres_proyectos() + ["Ambos", "❌ Cancelar"]
+        except Exception:
+            return ["Mina San Dimas", "Proyectos Durango", "Ambos", "❌ Cancelar"]
     return CATALOGOS_POR_ESTADO.get(esperando, [])
 
 
@@ -412,6 +424,12 @@ def _manejar_mensaje(message: dict):
     if comando == "/fotos" or bot_logic._remover_acentos(texto) == "descargar fotos":
         _admin_exportar_fotos(chat_id, tecnico, texto)
         return
+    if comando in ("/asignar_proyecto", "/asignar_tecnico"):
+        _admin_asignar_proyecto(chat_id, tecnico, texto)
+        return
+    if comando in ("/tecnicos", "/tecnico") or bot_logic._remover_acentos(texto) in ("tecnicos", "tecnico", "ver tecnicos"):
+        _admin_listar_tecnicos(chat_id, tecnico)
+        return
 
     texto_normalizado = tg.normalizar_texto_boton(texto)
     respuestas = procesar_mensaje_web(tecnico, texto_normalizado)
@@ -472,12 +490,18 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
     if not db.es_admin(tecnico):
         tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
         return
-    nombre = texto.removeprefix("/nuevo_tecnico").strip()
-    if not nombre:
-        tg.send_text(chat_id, "Usa: /nuevo_tecnico Nombre Completo", con_teclado=False)
+    partes_str = texto.removeprefix("/nuevo_tecnico").strip()
+    if not partes_str:
+        tg.send_text(chat_id, "Usa: `/nuevo_tecnico Nombre Completo | Proyecto`\n(ej. `/nuevo_tecnico Juan Pérez | Mina San Dimas`)", con_teclado=False)
         return
+    partes = [p.strip() for p in partes_str.split("|")]
+    nombre = partes[0]
+    proyecto = partes[1] if len(partes) > 1 else ""
     try:
-        codigo = db.agregar_tecnico(nombre)
+        if proyecto:
+            codigo = db.agregar_tecnico(nombre, proyecto=proyecto)
+        else:
+            codigo = db.agregar_tecnico(nombre)
     except Exception as e:
         print(f"[nuevo_tecnico] error: {e}")
         tg.send_text(chat_id, "No pude agregar al técnico por un error con la base de datos. Intenta más tarde.", es_admin=True)
@@ -486,13 +510,60 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
     if not codigo:
         tg.send_text(chat_id, f"{nombre} ya estaba en la lista de técnicos.", es_admin=True)
         return
+    proy_info = f" (Sede/Proyecto: *{proyecto}*)" if proyecto != "Ambos" else " (Acceso a todos los proyectos)"
     tg.send_text(
         chat_id,
-        f"Técnico agregado: {nombre}.\n"
+        f"✅ Técnico agregado: *{nombre}*{proy_info}.\n\n"
         f"Mándale este código para que active su cuenta (funciona una sola vez):\n"
-        f"/start {codigo}",
+        f"`/start {codigo}`",
         es_admin=True,
     )
+
+
+def _admin_asignar_proyecto(chat_id: int, tecnico: str, texto: str):
+    if not db.es_admin(tecnico):
+        tg.send_text(chat_id, "No tienes permiso para asignar proyectos.", con_teclado=False)
+        return
+    args = texto.removeprefix("/asignar_proyecto").removeprefix("/asignar_tecnico").strip() if texto.startswith("/asignar") else ""
+    if args and "|" in args:
+        tec_nom, proy_nom = [p.strip() for p in args.split("|", 1)]
+        try:
+            ok = db.asignar_proyecto_tecnico(tec_nom, proy_nom)
+        except Exception as e:
+            print(f"[asignar_proyecto] error: {e}")
+            ok = False
+        if ok:
+            tg.send_text(chat_id, f"✅ Proyecto *{proy_nom}* asignado al técnico *{tec_nom}*.", es_admin=True)
+        else:
+            tg.send_text(chat_id, f"❌ No se pudo actualizar el técnico *{tec_nom}*. Verifica el nombre.", es_admin=True)
+        return
+
+    # Iniciar flujo interactivo con botones
+    respuestas = bot_logic.procesar_mensaje_web(tecnico, "asignar proyecto")
+    if respuestas:
+        opciones = _obtener_opciones(get_estado(tecnico).esperando, tecnico=tecnico)
+        if opciones:
+            tg.send_opciones(chat_id, respuestas[-1], opciones)
+        else:
+            tg.send_text(chat_id, respuestas[-1], con_teclado=True, es_admin=True)
+
+
+def _admin_listar_tecnicos(chat_id: int, tecnico: str):
+    if not db.es_admin(tecnico):
+        tg.send_text(chat_id, "No tienes permiso para consultar técnicos.", con_teclado=False)
+        return
+    try:
+        tecnicos = db.listar_tecnicos_con_info()
+        lineas = ["👥 *Técnicos y Proyectos Asignados:*"]
+        for t in tecnicos:
+            rol = "👑 Admin" if t.get("es_admin") else "👷 Técnico"
+            estado_cuenta = "✅ Activo" if t.get("activo") else "⏳ Pendiente activación"
+            lineas.append(f"• *{t['nombre']}* ({rol})\n  🏗️ Proyecto: *{t.get('proyecto', 'Ambos')}* | {estado_cuenta}")
+        lineas.append("\nPara reasignar proyecto:\n`/asignar_proyecto <Técnico> | <Proyecto>`")
+        tg.send_text(chat_id, "\n".join(lineas), es_admin=True)
+    except Exception as e:
+        print(f"[listar_tecnicos] error: {e}")
+        tg.send_text(chat_id, "No pude consultar la lista de técnicos.", es_admin=True)
 
 
 def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):

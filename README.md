@@ -96,26 +96,28 @@ Los datos se pueden ver y corregir a mano en **Table Editor** de Supabase.
 
 ---
 
-## 👥 Registro de Técnicos y administración
+## 👥 Registro de Técnicos y Asignación de Proyectos
 
 La lista de técnicos vive en la tabla **`tecnicos`** de Supabase, y el admin del bot (definido en `ADMIN_TECNICOS` en `app/config.py`) la administra desde el propio chat de Telegram:
 
-1. El admin manda `/nuevo_tecnico Nombre Completo` (o pulsa `👤 + Nuevo técnico`). El bot da de alta al técnico y responde con un código de activación de un solo uso.
-2. El admin le reenvía ese código al técnico por fuera del bot (WhatsApp, en persona, etc.).
-3. El técnico abre un chat con el bot y manda `/start CÓDIGO`. Con eso, su chat de Telegram queda vinculado a su nombre **para siempre** — nadie más puede volver a usar ese código ni hacerse pasar por él, ni siquiera si el bot se reinicia.
+1. **Alta con asignación de proyecto:** El admin manda `/nuevo_tecnico Nombre Completo | Proyecto` (ej. `/nuevo_tecnico Juan Pérez | Mina San Dimas`, `/nuevo_tecnico Carlos Ruiz | Proyectos Durango`, o `/nuevo_tecnico Pedro Gómez | Ambos`).
+   - El bot da de alta al técnico con su sede autorizada y genera un código de activación de un solo uso.
+2. **Reasignación de proyectos:** El admin puede cambiar la sede asignada en cualquier momento con:
+   `/asignar_proyecto <Nombre del Técnico> | <Proyecto>`
+3. **Consulta de técnicos:** El admin puede consultar el listado completo de técnicos y sedes con `/tecnicos`.
+4. **Activación:** El admin le reenvía el código al técnico. El técnico abre el bot y manda `/start CÓDIGO`. Su chat queda vinculado a su nombre y proyectos autorizados.
+5. **Flujo de Reporte inteligente:**
+   - Si el técnico está asignado a **un solo proyecto** (ej. solo Mina), al pulsar `➕ Nuevo reporte` se auto-asigna su proyecto y va directo al paso de Ticket.
+   - Si está asignado a **varios proyectos** o "Ambos", solo podrá seleccionar entre los proyectos que el admin le autorizó.
 
-El primer técnico (el que venga sembrado en `TECNICOS`/`TECNICOS_INFO` de `app/config.py`, que se da de alta solo la primera vez que corre el bot) no tiene a quién mandarle el código por chat porque todavía nadie le ha escrito al bot. Para ese caso, recupera su código con:
-
-```
-GET /api/codigo-activacion?secret=<REPORTE_ADMIN_SECRET>&nombre=<nombre exacto del técnico>
-```
-
-y mándale tú mismo `/start CÓDIGO` la primera vez.
-
-Comandos solo para el admin (los demás técnicos reciben "No tienes permiso"):
-- `/nuevo_tecnico Nombre Completo` — da de alta un técnico nuevo.
-- `/reporte` (o el botón `📊 Exportar Excel`) — manda el Excel de la semana calendario actual (lunes a domingo).
-- `/reporte AAAA-MM-DD AAAA-MM-DD` — manda el Excel de ese periodo (ambas fechas inclusive).
+Comandos exclusivos para administradores:
+- `/nuevo_tecnico Nombre [| Proyecto]` — da de alta un técnico nuevo.
+- `/asignar_proyecto Técnico | Proyecto` — cambia el proyecto asignado a un técnico.
+- `/tecnicos` — lista los técnicos y sus sedes asignadas.
+- `/nuevo_proyecto Nombre | Tipo | Cliente` — registra una nueva sede o proyecto.
+- `/nuevo_departamento Nombre` — registra un nuevo departamento.
+- `/reporte` (o el botón `📊 Exportar Excel`) — manda el Excel de la semana o periodo/proyecto especificado.
+- `/fotos` — descarga las fotos de evidencia en archivo ZIP.
 
 Endpoints de admin (todos requieren `REPORTE_ADMIN_SECRET`, como `?secret=` o header `X-Admin-Secret`):
 - `GET /api/codigo-activacion?nombre=...` — código de activación pendiente de un técnico.

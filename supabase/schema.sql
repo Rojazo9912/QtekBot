@@ -11,6 +11,8 @@ create table if not exists tecnicos (
   chat_id           bigint unique,
   -- Código de un solo uso; se borra al activarse
   codigo_activacion text unique,
+  -- Proyecto o sede asignada al técnico (ej. 'Mina San Dimas', 'Proyectos Durango', 'Ambos')
+  proyecto          text not null default 'Ambos',
   creado            timestamptz not null default now()
 );
 
