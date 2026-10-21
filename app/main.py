@@ -630,8 +630,10 @@ def _admin_nuevo_proyecto(chat_id: int, tecnico: str, texto: str):
 
 def _admin_listar_proyectos(chat_id: int, tecnico: str, texto: str):
     try:
-        partes = texto.split(maxsplit=1)
-        filtro = partes[1].strip() if len(partes) > 1 and not partes[0].lower().startswith("/proyectos") else ""
+        t_norm = bot_logic._remover_acentos(texto).lower().strip()
+        filtro = ""
+        if t_norm.startswith("/proyecto ") and len(texto.split(maxsplit=1)) > 1:
+            filtro = texto.split(maxsplit=1)[1].strip()
         if filtro:
             reportes = db.reportes_en_periodo(dt.date(2020, 1, 1), dt.date(2030, 1, 1), proyecto=filtro)
             if not reportes:

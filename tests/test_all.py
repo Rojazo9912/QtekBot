@@ -676,6 +676,18 @@ class TestComandoReporteTelegram(unittest.TestCase):
         mock_db.assert_called_once()
         self.assertIn("Mantenimiento", mock_opciones.call_args[0][1])
 
+    @patch("app.main._tecnico_de", return_value="Miguel Abraham Lopez Ortiz")
+    @patch("app.db.listar_proyectos", return_value=[
+        {"nombre": "Mina San Dimas", "tipo": "Mina", "cliente": "First Majestic"},
+        {"nombre": "Proyectos Durango", "tipo": "Durango", "cliente": "Qtek Computación"},
+    ])
+    @patch("app.telegram_client.send_opciones")
+    def test_admin_lista_proyectos_boton_teclado(self, mock_opciones, mock_db, _tec):
+        self._mandar("🏗️ Proyectos")
+        mock_db.assert_called_once()
+        self.assertIn("Mina San Dimas", mock_opciones.call_args[0][1])
+        self.assertIn("Proyectos Durango", mock_opciones.call_args[0][1])
+
     def test_one_shot_registro_rapido(self):
         estado = get_estado("TecnicoEstandar")
         with patch("app.db.asegurar_zona", return_value="Nivel 10"):
