@@ -1,5 +1,19 @@
 # Cambios implementados en QtekBot
 
+## Versión 2.1 — Exportación Interactiva y Multisede en Excel
+
+1. **Asistente Interactivo de Exportación en Telegram**:
+   - Al pulsar el botón `📊 Exportar Excel` (o escribir `/reporte` sin argumentos), el bot guía al administrador paso a paso mediante botones en lugar de descargar inmediatamente la semana actual a ciegas.
+   - **Paso 1: Selección de Proyecto**: Elige un proyecto en específico (`Mina San Dimas`, `Proyectos Durango`) o `🌐 Todos (Consolidado)`.
+   - **Paso 2: Selección de Fechas**: Botones rápidos para `📅 Esta semana`, `🗓️ Este mes`, `📆 Hoy`, `⏮️ Semana pasada` o `✍️ Personalizado` (ingresando rango `AAAA-MM-DD AAAA-MM-DD`).
+   - Opción para cancelar en cualquier momento con `❌ Cancelar`.
+2. **Separación y Organización en el Archivo Excel (.xlsx)**:
+   - **Orden Cronológico**: Todas las hojas ahora ordenan los reportes cronológicamente por `Fecha` y `Hora`.
+   - **Pestañas por Proyecto**: Cuando el reporte es consolidado (múltiples proyectos), además de la hoja `Resumen` y `Reportes`, el Excel crea automáticamente una pestaña exclusiva para cada Proyecto (ej. pestaña `Mina San Dimas`, pestaña `Proyectos Durango`).
+   - Si se selecciona un solo proyecto, el archivo se filtra y titula exclusivamente con dicho proyecto.
+3. **Retrocompatibilidad Completa**:
+   - Se mantiene el comando directo por texto `/reporte [desde] [hasta] [proyecto]` para ejecuciones rápidas y scripts externos.
+
 ## Versión 2.0 — Mejoras de Producción y Operación en Mina
 
 1. **Edición Granular en Confirmación**: Al pulsar `✏️ Editar`, el bot ya no borra el reporte; permite seleccionar exactamente qué campo corregir (`Ticket`, `Departamento`, `Zona`, `Actividad`, `Estado`, `Fotos`, `Reiniciar todo` o `Volver`).

@@ -288,10 +288,23 @@ def _hoja_evidencias(ws, reportes: list[dict]) -> None:
 
 def generar_excel(reportes: list[dict], desde: dt.date, hasta: dt.date, proyecto: Optional[str] = None) -> tuple[bytes, str]:
     """Regresa (contenido del .xlsx, nombre de archivo sugerido)."""
+    # Ordenar cronológicamente por fecha y hora
+    reportes_ordenados = sorted(reportes, key=lambda r: (r.get("fecha", ""), r.get("hora", "")))
+
     wb = Workbook()
-    _hoja_resumen(wb.active, reportes, desde, hasta, proyecto=proyecto)
-    _hoja_reportes(wb.create_sheet("Reportes"), reportes)
-    _hoja_evidencias(wb.create_sheet("Evidencias"), reportes)
+    _hoja_resumen(wb.active, reportes_ordenados, desde, hasta, proyecto=proyecto)
+    _hoja_reportes(wb.create_sheet("Reportes"), reportes_ordenados)
+
+    # Si hay múltiples proyectos en el reporte consolidado, agregar pestaña para cada uno
+    if not proyecto:
+        proyectos_presentes = list(dict.fromkeys(r.get("proyecto", "Mina San Dimas") for r in reportes_ordenados if r.get("proyecto")))
+        if len(proyectos_presentes) > 1:
+            for p in proyectos_presentes:
+                nombre_hoja = p[:31].replace(":", "").replace("/", "").replace("\\", "").replace("?", "").replace("*", "").replace("[", "").replace("]", "")
+                reps_p = [r for r in reportes_ordenados if r.get("proyecto", "Mina San Dimas") == p]
+                _hoja_reportes(wb.create_sheet(nombre_hoja), reps_p)
+
+    _hoja_evidencias(wb.create_sheet("Evidencias"), reportes_ordenados)
 
     buffer = io.BytesIO()
     wb.save(buffer)

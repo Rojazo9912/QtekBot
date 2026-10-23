@@ -12,6 +12,7 @@ import hmac
 import io
 import os
 from pathlib import Path
+import re
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -134,6 +135,23 @@ def _obtener_opciones(esperando: str | None, tecnico: str | None = None) -> list
             return db.listar_nombres_proyectos() + ["Ambos", "❌ Cancelar"]
         except Exception:
             return ["Mina San Dimas", "Proyectos Durango", "Ambos", "❌ Cancelar"]
+    if esperando == "admin_reporte_proyecto":
+        try:
+            proyectos = db.listar_nombres_proyectos()
+        except Exception:
+            proyectos = ["Mina San Dimas", "Proyectos Durango"]
+        return [f"🏗️ {p}" for p in proyectos] + ["🌐 Todos (Consolidado)", "❌ Cancelar"]
+    if esperando == "admin_reporte_periodo":
+        return [
+            "📅 Esta semana",
+            "🗓️ Este mes",
+            "📆 Hoy",
+            "⏮️ Semana pasada",
+            "✍️ Personalizado",
+            "❌ Cancelar",
+        ]
+    if esperando == "admin_reporte_fechas":
+        return ["❌ Cancelar"]
     return CATALOGOS_POR_ESTADO.get(esperando, [])
 
 
@@ -403,6 +421,12 @@ def _manejar_mensaje(message: dict):
 
     es_admin = db.es_admin(tecnico)
 
+    # Si el admin está en el flujo interactivo de reporte Excel:
+    estado_actual = get_estado(tecnico)
+    if es_admin and estado_actual.esperando and estado_actual.esperando.startswith("admin_reporte_"):
+        if _manejar_flujo_reporte_excel(chat_id, tecnico, texto, estado_actual):
+            return
+
     if comando == "/nuevo_tecnico":
         _admin_nuevo_tecnico(chat_id, tecnico, texto)
         return
@@ -566,30 +590,29 @@ def _admin_listar_tecnicos(chat_id: int, tecnico: str):
         tg.send_text(chat_id, "No pude consultar la lista de técnicos.", es_admin=True)
 
 
-def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):
-    """/reporte → semana actual; /reporte [AAAA-MM-DD AAAA-MM-DD] [Proyecto] → ese periodo/proyecto."""
-    if not db.es_admin(tecnico):
-        tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
-        return
-    partes = texto.split()[1:] if texto.split()[0].lower() == "/reporte" else []
-    proyecto_filtro = None
+def _iniciar_flujo_exportar_excel(chat_id: int, tecnico: str):
+    """Inicia el asistente con botones para seleccionar proyecto y fechas."""
+    estado = get_estado(tecnico)
+    estado.esperando = "admin_reporte_proyecto"
+    estado.borrador = {}
     try:
-        if len(partes) == 0:
-            inicio, fin = _periodo()
-        elif len(partes) == 1:
-            inicio, fin = _periodo()
-            proyecto_filtro = partes[0]
-        elif len(partes) == 2:
-            inicio, fin = _periodo(partes[0], partes[1])
-        elif len(partes) >= 3:
-            inicio, fin = _periodo(partes[0], partes[1])
-            proyecto_filtro = " ".join(partes[2:])
-        else:
-            raise ValueError
-    except ValueError:
-        tg.send_text(chat_id, "Usa: /reporte  o  /reporte AAAA-MM-DD AAAA-MM-DD [Proyecto]", es_admin=True)
-        return
+        proyectos = db.listar_nombres_proyectos()
+    except Exception:
+        proyectos = ["Mina San Dimas", "Proyectos Durango"]
 
+    opciones = [f"🏗️ {p}" for p in proyectos] + ["🌐 Todos (Consolidado)", "❌ Cancelar"]
+    tg.send_opciones(
+        chat_id,
+        "📊 *Exportar Reporte a Excel*\n\n"
+        "🏗️ *Paso 1 de 2: Selecciona el Proyecto a exportar:*\n\n"
+        + "\n".join(f"• *{p}*" for p in proyectos)
+        + "\n• *Todos (Consolidado)*",
+        opciones,
+    )
+
+
+def _ejecutar_exportacion_excel(chat_id: int, tecnico: str, inicio: dt.date, fin: dt.date, proyecto_filtro: str | None = None):
+    """Genera y envía el documento Excel al chat de Telegram."""
     txt_proy = f" ({proyecto_filtro})" if proyecto_filtro else " (Consolidado)"
     tg.send_text(chat_id, f"Generando Excel del {inicio.isoformat()} al {fin.isoformat()}{txt_proy}…", con_teclado=False)
     try:
@@ -603,12 +626,168 @@ def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):
         print(f"[exportar_excel] error: {e}")
         tg.send_text(chat_id, "No pude generar el Excel. Intenta más tarde.", es_admin=True)
         return
+
     tg.send_document(
         chat_id, contenido, nombre,
-        caption=f"📊 {len(reportes)} reporte(s) del {inicio.isoformat()} al {fin.isoformat()}{txt_proy}.\n"
-                f"Otro periodo: /reporte AAAA-MM-DD AAAA-MM-DD [Proyecto]",
+        caption=f"📊 {len(reportes)} reporte(s) del {inicio.isoformat()} al {fin.isoformat()}{txt_proy}.\n\n"
+                f"💡 Puedes volver a exportar tocando el botón '📊 Exportar Excel'.",
         mime_type=MIME_XLSX,
     )
+    tg.send_text(chat_id, "Listo. ¿Qué más deseas hacer?", con_teclado=True, es_admin=True)
+
+
+def _manejar_flujo_reporte_excel(chat_id: int, tecnico: str, texto: str, estado) -> bool:
+    """Procesa las respuestas del admin durante el asistente de exportación."""
+    t_norm = bot_logic._remover_acentos(texto.strip()).lower()
+    if t_norm in ("cancelar", "x cancelar", "❌ cancelar", "/cancelar", "salir"):
+        estado.esperando = None
+        estado.borrador = {}
+        tg.send_text(chat_id, "Exportación cancelada. ¿Qué deseas hacer?", con_teclado=True, es_admin=True)
+        return True
+
+    if (texto.startswith("/") and not texto.startswith("/cancelar")) or t_norm in ("mis reportes", "historial", "nuevo reporte", "mis pendientes", "ayuda"):
+        estado.esperando = None
+        estado.borrador = {}
+        return False
+
+    if estado.esperando == "admin_reporte_proyecto":
+        if "todos" in t_norm or "consolidado" in t_norm:
+            proy_elegido = None
+            proy_nombre = "Todos (Consolidado)"
+        else:
+            try:
+                proyectos = db.listar_nombres_proyectos()
+            except Exception:
+                proyectos = ["Mina San Dimas", "Proyectos Durango"]
+            encontrado = None
+            for p in proyectos:
+                p_norm = bot_logic._remover_acentos(p).lower()
+                if p_norm in t_norm or t_norm in p_norm:
+                    encontrado = p
+                    break
+            if not encontrado:
+                encontrado = texto.replace("🏗️", "").strip()
+            proy_elegido = encontrado
+            proy_nombre = encontrado
+
+        estado.borrador["reporte_proyecto"] = proy_elegido
+        estado.esperando = "admin_reporte_periodo"
+        opciones_periodo = [
+            "📅 Esta semana",
+            "🗓️ Este mes",
+            "📆 Hoy",
+            "⏮️ Semana pasada",
+            "✍️ Personalizado",
+            "❌ Cancelar",
+        ]
+        tg.send_opciones(
+            chat_id,
+            f"Proyecto seleccionado: *{proy_nombre}*\n\n"
+            f"📅 *Paso 2 de 2: Selecciona el Periodo de Fechas:*",
+            opciones_periodo,
+        )
+        return True
+
+    if estado.esperando == "admin_reporte_periodo":
+        proy_elegido = estado.borrador.get("reporte_proyecto")
+        hoy = dt.datetime.now(ZONA_HORARIA).date()
+
+        if "personalizado" in t_norm or "custom" in t_norm:
+            estado.esperando = "admin_reporte_fechas"
+            tg.send_opciones(
+                chat_id,
+                "✍️ Ingresa el rango de fechas en formato:\n"
+                "`AAAA-MM-DD AAAA-MM-DD`\n\n"
+                "_Ejemplo:_ `2026-10-01 2026-10-22`",
+                ["❌ Cancelar"],
+            )
+            return True
+
+        if "esta semana" in t_norm or "semana actual" in t_norm:
+            inicio, fin = _periodo()
+        elif "este mes" in t_norm or "mes actual" in t_norm:
+            inicio = hoy.replace(day=1)
+            fin = hoy
+        elif "hoy" in t_norm or "dia" in t_norm:
+            inicio, fin = hoy, hoy
+        elif "semana pasada" in t_norm or "anterior" in t_norm:
+            lunes_actual = hoy - dt.timedelta(days=hoy.weekday())
+            inicio = lunes_actual - dt.timedelta(days=7)
+            fin = inicio + dt.timedelta(days=6)
+        else:
+            fechas = re.findall(r"\d{4}-\d{2}-\d{2}", texto)
+            if len(fechas) >= 2:
+                try:
+                    inicio = dt.date.fromisoformat(fechas[0])
+                    fin = dt.date.fromisoformat(fechas[1])
+                    if inicio > fin:
+                        inicio, fin = fin, inicio
+                except ValueError:
+                    tg.send_text(chat_id, "Fechas inválidas. Usa AAAA-MM-DD AAAA-MM-DD o pulsa una opción del teclado.")
+                    return True
+            else:
+                tg.send_text(chat_id, "Opción no reconocida. Pulsa una opción del teclado o '❌ Cancelar':")
+                return True
+
+        estado.esperando = None
+        estado.borrador = {}
+        _ejecutar_exportacion_excel(chat_id, tecnico, inicio, fin, proy_elegido)
+        return True
+
+    if estado.esperando == "admin_reporte_fechas":
+        fechas = re.findall(r"\d{4}-\d{2}-\d{2}", texto)
+        if len(fechas) < 2:
+            tg.send_text(
+                chat_id,
+                "⚠️ No encontré dos fechas válidas.\n"
+                "Por favor escribe el rango como `AAAA-MM-DD AAAA-MM-DD` (ej. `2026-10-01 2026-10-22`) o pulsa '❌ Cancelar'.",
+            )
+            return True
+        try:
+            inicio = dt.date.fromisoformat(fechas[0])
+            fin = dt.date.fromisoformat(fechas[1])
+            if inicio > fin:
+                inicio, fin = fin, inicio
+        except ValueError:
+            tg.send_text(chat_id, "⚠️ Fechas no válidas en el calendario. Intenta de nuevo:")
+            return True
+
+        proy_elegido = estado.borrador.get("reporte_proyecto")
+        estado.esperando = None
+        estado.borrador = {}
+        _ejecutar_exportacion_excel(chat_id, tecnico, inicio, fin, proy_elegido)
+        return True
+
+    return False
+
+
+def _admin_exportar_excel(chat_id: int, tecnico: str, texto: str):
+    """/reporte → asistente interactivo; /reporte [AAAA-MM-DD AAAA-MM-DD] [Proyecto] → directo."""
+    if not db.es_admin(tecnico):
+        tg.send_text(chat_id, "No tienes permiso para usar este comando.", con_teclado=False)
+        return
+    partes = texto.split()[1:] if texto.split()[0].lower() == "/reporte" else []
+    if len(partes) == 0:
+        _iniciar_flujo_exportar_excel(chat_id, tecnico)
+        return
+
+    proyecto_filtro = None
+    try:
+        if len(partes) == 1:
+            inicio, fin = _periodo()
+            proyecto_filtro = partes[0]
+        elif len(partes) == 2:
+            inicio, fin = _periodo(partes[0], partes[1])
+        elif len(partes) >= 3:
+            inicio, fin = _periodo(partes[0], partes[1])
+            proyecto_filtro = " ".join(partes[2:])
+        else:
+            raise ValueError
+    except ValueError:
+        tg.send_text(chat_id, "Usa: /reporte  o  /reporte AAAA-MM-DD AAAA-MM-DD [Proyecto]", es_admin=True)
+        return
+
+    _ejecutar_exportacion_excel(chat_id, tecnico, inicio, fin, proyecto_filtro)
 
 
 def _admin_exportar_fotos(chat_id: int, tecnico: str, texto: str):

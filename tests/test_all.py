@@ -511,6 +511,25 @@ class TestExcel(unittest.TestCase):
         resumen = [c.value for fila in wb["Resumen"].iter_rows() for c in fila]
         self.assertIn("Mantenimiento", resumen)
 
+    def test_excel_pestanas_por_proyecto_si_consolidado(self):
+        reportes = [
+            {"numero": "#001", "ticket": "TK-1", "tecnico": "Juan", "departamento": "Infraestructura",
+             "ubicacion": "Nivel 10", "actividad": "Act 1", "estado": "Terminado", "evidencias": [],
+             "fecha": "2026-09-22", "hora": "10:00:00", "actualizado": "2026-09-22 10:00:00", "proyecto": "Mina San Dimas"},
+            {"numero": "#002", "ticket": "TK-2", "tecnico": "Ana", "departamento": "Mantenimiento",
+             "ubicacion": "Oficinas", "actividad": "Act 2", "estado": "Pendiente", "evidencias": [],
+             "fecha": "2026-09-23", "hora": "11:00:00", "actualizado": "2026-09-23 11:00:00", "proyecto": "Proyectos Durango"},
+        ]
+        contenido, _ = excel.generar_excel(reportes, dt.date(2026, 9, 21), dt.date(2026, 9, 27))
+        wb = load_workbook(io.BytesIO(contenido))
+        self.assertIn("Resumen", wb.sheetnames)
+        self.assertIn("Reportes", wb.sheetnames)
+        self.assertIn("Mina San Dimas", wb.sheetnames)
+        self.assertIn("Proyectos Durango", wb.sheetnames)
+        self.assertIn("Evidencias", wb.sheetnames)
+        self.assertEqual(wb["Mina San Dimas"]["A2"].value, "#001")
+        self.assertEqual(wb["Proyectos Durango"]["A2"].value, "#002")
+
 
 class TestFastAPIEndpoints(unittest.TestCase):
     def setUp(self):
@@ -614,6 +633,8 @@ class TestSeguridadEndpoints(unittest.TestCase):
 
 class TestComandoReporteTelegram(unittest.TestCase):
     def setUp(self):
+        from app.state import _estado_por_tecnico
+        _estado_por_tecnico.clear()
         self.client = TestClient(app)
 
     def _mandar(self, texto):
@@ -640,8 +661,30 @@ class TestComandoReporteTelegram(unittest.TestCase):
     @patch("app.telegram_client.send_document")
     @patch("app.telegram_client.send_text")
     def test_boton_exportar_excel(self, _texto, mock_doc, _periodo, _tec):
+        # 1. Pulsa botón -> pide proyecto
         self._mandar("📊 Exportar Excel")
+        self.assertEqual(get_estado("Miguel Abraham Lopez Ortiz").esperando, "admin_reporte_proyecto")
+        # 2. Selecciona proyecto -> pide periodo
+        self._mandar("🌐 Todos (Consolidado)")
+        self.assertEqual(get_estado("Miguel Abraham Lopez Ortiz").esperando, "admin_reporte_periodo")
+        # 3. Selecciona periodo -> envía Excel
+        self._mandar("📅 Esta semana")
         mock_doc.assert_called_once()
+        self.assertIsNone(get_estado("Miguel Abraham Lopez Ortiz").esperando)
+
+    @patch("app.main._tecnico_de", return_value="Miguel Abraham Lopez Ortiz")
+    @patch("app.db.reportes_en_periodo", return_value=[])
+    @patch("app.telegram_client.send_document")
+    @patch("app.telegram_client.send_text")
+    def test_boton_exportar_excel_fechas_custom(self, _texto, mock_doc, _periodo, _tec):
+        self._mandar("📊 Exportar Excel")
+        self._mandar("🏗️ Mina San Dimas")
+        self.assertEqual(get_estado("Miguel Abraham Lopez Ortiz").borrador.get("reporte_proyecto"), "Mina San Dimas")
+        self._mandar("✍️ Personalizado")
+        self.assertEqual(get_estado("Miguel Abraham Lopez Ortiz").esperando, "admin_reporte_fechas")
+        self._mandar("2026-10-01 2026-10-20")
+        mock_doc.assert_called_once()
+        self.assertIsNone(get_estado("Miguel Abraham Lopez Ortiz").esperando)
 
     @patch("app.main._tecnico_de", return_value="TecnicoEstandar")
     @patch("app.telegram_client.send_document")
