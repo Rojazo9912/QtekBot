@@ -7,7 +7,6 @@ Hojas:
 - Resumen: datos del contrato, periodo y totales por estado, departamento y ubicación.
 - Reportes: una fila por reporte, con filtros y las fotos en miniatura
   dentro de la celda "Evidencias".
-- Evidencias: una fila por foto, con link.
 """
 import datetime as dt
 import io
@@ -251,7 +250,7 @@ def _hoja_reportes(ws, reportes: list[dict]) -> None:
             # Puntos = píxeles * 3/4
             ws.row_dimensions[i].height = (_MINI_ALTO_PX + 2 * _MINI_MARGEN_PX) * 0.75
         elif r["evidencias"]:
-            ws.cell(row=i, column=col_evidencias, value="Ver hoja Evidencias").alignment = _ARRIBA
+            ws.cell(row=i, column=col_evidencias, value="Sin vista previa").alignment = _ARRIBA
 
         # Celda de Proyecto
         c_proy = ws.cell(row=i, column=col_proyecto, value=r.get("proyecto", "Mina San Dimas"))
@@ -303,8 +302,6 @@ def generar_excel(reportes: list[dict], desde: dt.date, hasta: dt.date, proyecto
                 nombre_hoja = p[:31].replace(":", "").replace("/", "").replace("\\", "").replace("?", "").replace("*", "").replace("[", "").replace("]", "")
                 reps_p = [r for r in reportes_ordenados if r.get("proyecto", "Mina San Dimas") == p]
                 _hoja_reportes(wb.create_sheet(nombre_hoja), reps_p)
-
-    _hoja_evidencias(wb.create_sheet("Evidencias"), reportes_ordenados)
 
     buffer = io.BytesIO()
     wb.save(buffer)

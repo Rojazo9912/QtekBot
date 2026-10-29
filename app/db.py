@@ -104,22 +104,53 @@ def listar_tecnicos() -> list[str]:
     return [f["nombre"] for f in res.data]
 
 
+def separar_nombre_y_proyecto(texto: str, proyecto_explicito: str = "") -> tuple[str, str]:
+    """Separa 'Nombre | Proyecto' o detecta si el usuario escribió el proyecto
+    al final del nombre sin usar '|' (ej. 'Miguel Lopez Mina San Dimas')."""
+    limpio = " ".join(texto.split())
+    if proyecto_explicito.strip():
+        return limpio, proyecto_explicito.strip()
+    if "|" in limpio:
+        partes = [p.strip() for p in limpio.split("|", 1)]
+        return partes[0], (partes[1] if len(partes) > 1 and partes[1] else "Ambos")
+
+    proyectos_conocidos = list(CATALOGO_PROYECTOS)
+    try:
+        for p in listar_nombres_proyectos():
+            if p not in proyectos_conocidos:
+                proyectos_conocidos.append(p)
+    except Exception:
+        pass
+
+    lower = limpio.lower()
+    for proy in sorted(proyectos_conocidos, key=len, reverse=True):
+        proy_l = proy.lower()
+        if lower.endswith(" " + proy_l):
+            nombre_sin_proy = limpio[: -(len(proy) + 1)].strip(" -|")
+            if nombre_sin_proy:
+                return nombre_sin_proy, proy
+    return limpio, "Ambos"
+
+
 def agregar_tecnico(
     nombre: str, cargo: str = "Técnico de Campo", imss: str = "N/A", proyecto: str = "Ambos",
 ) -> Optional[str]:
     """Da de alta un técnico y regresa su código de activación. None si el
     nombre viene vacío o ya existe (sin distinguir mayúsculas)."""
-    nombre = " ".join(nombre.split())
-    if not nombre:
+    nombre_limpio, proy_detectado = separar_nombre_y_proyecto(
+        nombre, proyecto if proyecto and proyecto != "Ambos" else ""
+    )
+    if not nombre_limpio:
         return None
-    if nombre.lower() in {n.lower() for n in listar_tecnicos()}:
+    if nombre_limpio.lower() in {n.lower() for n in listar_tecnicos()}:
         return None
     codigo = _generar_codigo_activacion()
     datos = {
-        "nombre": nombre, "cargo": cargo, "imss": imss, "codigo_activacion": codigo,
+        "nombre": nombre_limpio, "cargo": cargo, "imss": imss, "codigo_activacion": codigo,
     }
-    if proyecto:
-        datos["proyecto"] = proyecto.strip()
+    proy_final = proyecto.strip() if (proyecto and proyecto != "Ambos") else proy_detectado
+    if proy_final:
+        datos["proyecto"] = proy_final
     _tabla_tecnicos().insert(datos).execute()
     return codigo
 
@@ -184,12 +215,20 @@ def codigo_activacion_pendiente(nombre: str) -> Optional[str]:
 
 def activar_tecnico_por_codigo(codigo: str, chat_id: int) -> Optional[str]:
     """Vincula el chat al técnico dueño del código y consume el código, en un
-    solo UPDATE (dos personas no pueden usar el mismo código)."""
+    solo UPDATE (dos personas no pueden usar el mismo código). Si el chat_id
+    estaba vinculado a un registro anterior, lo libera primero."""
     codigo = codigo.strip().upper()
     if not codigo:
         return None
+    tabla = _tabla_tecnicos()
+    try:
+        prev = tabla.select("nombre").eq("codigo_activacion", codigo).limit(1).execute()
+        if prev.data:
+            tabla.update({"chat_id": None}).eq("chat_id", chat_id).neq("codigo_activacion", codigo).execute()
+    except Exception:
+        pass
     res = (
-        _tabla_tecnicos()
+        tabla
         .update({"chat_id": chat_id, "codigo_activacion": None})
         .eq("codigo_activacion", codigo)
         .execute()
@@ -260,7 +299,34 @@ def crear_reporte(
     except Exception:
         pass
 
-    res = client.table("reportes").insert(payload).execute()
+    try:
+        res = client.table("reportes").insert(payload).execute()
+    except Exception as e:
+        err_str = str(e)
+        if "23503" in err_str or "reportes_tecnico_fkey" in err_str or "tecnicos" in err_str:
+            nombre_limpio, proy_det = separar_nombre_y_proyecto(tecnico.strip())
+            tecnico_resuelto = nombre_limpio or tecnico.strip()
+            try:
+                exist = client.table("tecnicos").select("nombre").ilike("nombre", tecnico_resuelto).limit(1).execute()
+                if exist.data:
+                    tecnico_resuelto = exist.data[0]["nombre"]
+                else:
+                    client.table("tecnicos").upsert(
+                        {
+                            "nombre": tecnico_resuelto,
+                            "cargo": "Técnico de Campo",
+                            "imss": "N/A",
+                            "proyecto": proy_det if proy_det != "Ambos" else proyecto_str,
+                        },
+                        on_conflict="nombre",
+                    ).execute()
+            except Exception as e_tec:
+                print(f"[db] aviso auto-registrando técnico '{tecnico_resuelto}': {e_tec}")
+            payload["tecnico"] = tecnico_resuelto
+            payload["creado_por"] = tecnico_resuelto
+            res = client.table("reportes").insert(payload).execute()
+        else:
+            raise
     return formatear_numero(res.data[0]["id"])
 
 

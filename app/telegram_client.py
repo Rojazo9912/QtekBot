@@ -5,6 +5,7 @@ modo desarrollo/producción, no hay formato de número ambiguo. El token que te
 da @BotFather es lo único que necesitas.
 """
 import os
+import time
 import httpx
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -71,6 +72,20 @@ def normalizar_texto_boton(texto: str) -> str:
     return ALIAS_BOTONES.get(texto.strip().lower(), texto)
 
 
+def _post_con_reintento(url: str, *, json: dict | None = None, data: dict | None = None, files: dict | None = None, timeout: int = 10) -> httpx.Response:
+    """Envía POST a la API de Telegram con hasta 3 intentos ante cortes de red (ej. Errno 104 Connection reset by peer)."""
+    ultimo_err = None
+    for intento in range(3):
+        try:
+            with httpx.Client(timeout=timeout) as http:
+                return http.post(url, json=json, data=data, files=files)
+        except Exception as e:
+            ultimo_err = e
+            if intento < 2:
+                time.sleep(0.4 * (intento + 1))
+    raise ultimo_err  # type: ignore[misc]
+
+
 def send_text(chat_id: int, texto: str, con_teclado: bool = True, es_admin: bool = False) -> None:
     if not TOKEN:
         print("[telegram] AVISO: TELEGRAM_BOT_TOKEN no está configurado.")
@@ -79,10 +94,9 @@ def send_text(chat_id: int, texto: str, con_teclado: bool = True, es_admin: bool
     if con_teclado:
         payload["reply_markup"] = TECLADO_ADMIN if es_admin else TECLADO_ACCIONES
     try:
-        with httpx.Client(timeout=10) as http:
-            r = http.post(f"{API_URL}/sendMessage", json=payload)
-            if r.status_code >= 400:
-                print(f"[telegram] error {r.status_code}: {r.text}")
+        r = _post_con_reintento(f"{API_URL}/sendMessage", json=payload, timeout=10)
+        if r.status_code >= 400:
+            print(f"[telegram] error {r.status_code}: {r.text}")
     except Exception as e:
         print(f"[telegram] error enviando mensaje: {e}")
 
@@ -121,10 +135,9 @@ def send_opciones(chat_id: int, texto: str, opciones: list[str]) -> None:
     }
     payload = {"chat_id": chat_id, "text": texto, "reply_markup": teclado}
     try:
-        with httpx.Client(timeout=10) as http:
-            r = http.post(f"{API_URL}/sendMessage", json=payload)
-            if r.status_code >= 400:
-                print(f"[telegram] error {r.status_code}: {r.text}")
+        r = _post_con_reintento(f"{API_URL}/sendMessage", json=payload, timeout=10)
+        if r.status_code >= 400:
+            print(f"[telegram] error {r.status_code}: {r.text}")
     except Exception as e:
         print(f"[telegram] error enviando opciones: {e}")
 
@@ -142,10 +155,9 @@ def send_document(
     if caption:
         data["caption"] = caption
     try:
-        with httpx.Client(timeout=45) as http:
-            r = http.post(f"{API_URL}/sendDocument", data=data, files=files)
-            if r.status_code >= 400:
-                print(f"[telegram] error enviando documento: {r.status_code} - {r.text}")
+        r = _post_con_reintento(f"{API_URL}/sendDocument", data=data, files=files, timeout=45)
+        if r.status_code >= 400:
+            print(f"[telegram] error enviando documento: {r.status_code} - {r.text}")
     except Exception as e:
         print(f"[telegram] error enviando documento: {e}")
 

@@ -388,17 +388,18 @@ def _manejar_foto(message: dict):
 
 
 def _tecnico_de(chat_id: int) -> str | None:
-    """Técnico identificado en este chat."""
-    tecnico = SESIONES.get(chat_id)
-    if tecnico:
-        return tecnico
+    """Técnico identificado en este chat. Consulta la BD como fuente de verdad
+    y usa SESIONES como respaldo ante fallos temporales de red."""
     try:
         tecnico = db.tecnico_por_chat_id(chat_id)
         if tecnico:
             SESIONES[chat_id] = tecnico
+            return tecnico
+        SESIONES.pop(chat_id, None)
+        return None
     except Exception as e:
         print(f"[auth] error consultando técnico por chat_id: {e}")
-    return tecnico
+        return SESIONES.get(chat_id)
 
 
 def _manejar_mensaje(message: dict):
@@ -474,19 +475,19 @@ def _manejar_mensaje(message: dict):
 
 
 def _manejar_start(chat_id: int, texto: str):
-    tecnico_existente = _tecnico_de(chat_id)
-    if tecnico_existente:
-        estado = get_estado(tecnico_existente)
-        estado.esperando = None
-        estado.borrador = {}
-        estado.folio_activo = None
-        es_admin = db.es_admin(tecnico_existente)
-        tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Conversación reiniciada. Usa los botones o escribe libremente.", es_admin=es_admin)
-        return
-
     partes = texto.split(maxsplit=1)
     codigo = partes[1].strip() if len(partes) > 1 else ""
+
     if not codigo:
+        tecnico_existente = _tecnico_de(chat_id)
+        if tecnico_existente:
+            estado = get_estado(tecnico_existente)
+            estado.esperando = None
+            estado.borrador = {}
+            estado.folio_activo = None
+            es_admin = db.es_admin(tecnico_existente)
+            tg.send_text(chat_id, f"Hola de nuevo, {tecnico_existente.split(' ')[0]}. Conversación reiniciada. Usa los botones o escribe libremente.", es_admin=es_admin)
+            return
         tg.send_text(
             chat_id,
             "Necesitas un código de activación para usar este bot. Pídeselo al admin y mándalo así: /start CÓDIGO",
@@ -502,6 +503,11 @@ def _manejar_start(chat_id: int, texto: str):
         return
 
     if not nombre:
+        tecnico_existente = _tecnico_de(chat_id)
+        if tecnico_existente:
+            es_admin = db.es_admin(tecnico_existente)
+            tg.send_text(chat_id, f"Tu cuenta ya está activa como *{tecnico_existente}*. Usa los botones para continuar.", es_admin=es_admin)
+            return
         tg.send_text(chat_id, "Código inválido o ya usado. Pídele al admin un código nuevo.", con_teclado=False)
         return
 
@@ -518,9 +524,8 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
     if not partes_str:
         tg.send_text(chat_id, "Usa: `/nuevo_tecnico Nombre Completo | Proyecto`\n(ej. `/nuevo_tecnico Juan Pérez | Mina San Dimas`)", con_teclado=False)
         return
-    partes = [p.strip() for p in partes_str.split("|")]
-    nombre = partes[0]
-    proyecto = partes[1] if len(partes) > 1 else ""
+    nombre, proy_det = db.separar_nombre_y_proyecto(partes_str)
+    proyecto = proy_det if proy_det != "Ambos" else ""
     try:
         if proyecto:
             codigo = db.agregar_tecnico(nombre, proyecto=proyecto)
@@ -534,7 +539,7 @@ def _admin_nuevo_tecnico(chat_id: int, tecnico: str, texto: str):
     if not codigo:
         tg.send_text(chat_id, f"{nombre} ya estaba en la lista de técnicos.", es_admin=True)
         return
-    proy_info = f" (Sede/Proyecto: *{proyecto}*)" if proyecto != "Ambos" else " (Acceso a todos los proyectos)"
+    proy_info = f" (Sede/Proyecto: *{proyecto}*)" if proyecto else " (Acceso a todos los proyectos)"
     tg.send_text(
         chat_id,
         f"✅ Técnico agregado: *{nombre}*{proy_info}.\n\n"

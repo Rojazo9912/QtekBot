@@ -439,7 +439,7 @@ class TestExcel(unittest.TestCase):
         self.assertEqual(nombre, "Reporte_Campo_2026-09-21_a_2026-09-27.xlsx")
 
         wb = load_workbook(io.BytesIO(contenido))
-        self.assertEqual(wb.sheetnames, ["Resumen", "Reportes", "Evidencias"])
+        self.assertEqual(wb.sheetnames, ["Resumen", "Reportes"])
         ws = wb["Reportes"]
         self.assertEqual(ws["A2"].value, "#001")
         self.assertEqual(ws["C1"].value, "Departamento")
@@ -451,9 +451,6 @@ class TestExcel(unittest.TestCase):
         self.assertEqual(len(ws._images), 2)
         self.assertTrue(all(img.anchor._from.row == 1 and img.anchor._from.col == 10 for img in ws._images))
         self.assertTrue(all(img.height == 120 for img in ws._images))
-        ev = wb["Evidencias"]
-        self.assertEqual(ev["D3"].value, "https://x/2.jpg")
-        self.assertEqual(ev["D3"].hyperlink.target, "https://x/2.jpg")
         resumen = [c.value for fila in wb["Resumen"].iter_rows() for c in fila]
         self.assertIn("Total de reportes", resumen)
         self.assertIn("Por departamento", resumen)
@@ -465,7 +462,7 @@ class TestExcel(unittest.TestCase):
         contenido, _ = excel.generar_excel(reportes, dt.date(2026, 9, 21), dt.date(2026, 9, 27))
         ws = load_workbook(io.BytesIO(contenido))["Reportes"]
         self.assertEqual(len(ws._images), 0)
-        self.assertEqual(ws["K2"].value, "Ver hoja Evidencias")
+        self.assertEqual(ws["K2"].value, "Sin vista previa")
 
     @patch("app.excel.httpx.get")
     @patch("app.storage.get_client")
@@ -526,7 +523,7 @@ class TestExcel(unittest.TestCase):
         self.assertIn("Reportes", wb.sheetnames)
         self.assertIn("Mina San Dimas", wb.sheetnames)
         self.assertIn("Proyectos Durango", wb.sheetnames)
-        self.assertIn("Evidencias", wb.sheetnames)
+        self.assertNotIn("Evidencias", wb.sheetnames)
         self.assertEqual(wb["Mina San Dimas"]["A2"].value, "#001")
         self.assertEqual(wb["Proyectos Durango"]["A2"].value, "#002")
 
@@ -940,6 +937,34 @@ class TestComandoReporteTelegram(unittest.TestCase):
         self.assertIsNone(estado.esperando)
         mock_asig.assert_called_once_with("Juan Pérez", "Proyectos Durango")
         self.assertIn("asignó el proyecto", resp3[0].lower())
+
+    def test_separar_nombre_y_proyecto_sin_barra(self):
+        nom, proy = db.separar_nombre_y_proyecto("Miguel Lopez Mina San Dimas")
+        self.assertEqual(nom, "Miguel Lopez")
+        self.assertEqual(proy, "Mina San Dimas")
+
+    @patch("app.db.get_client")
+    def test_crear_reporte_recupera_ante_error_fk_23503(self, mock_client):
+        client = mock_client.return_value
+        tabla = client.table.return_value
+        # Primer insert lanza error 23503 (FK), segundo insert tiene éxito
+        res_ok = MagicMock()
+        res_ok.data = [{"id": 55}]
+        tabla.insert.return_value.execute.side_effect = [
+            Exception("{'code': '23503', 'details': 'Key (tecnico)=(Miguel Lopez Mina San Dimas) is not present in table \"tecnicos\".'}"),
+            res_ok,
+        ]
+        # Búsqueda de técnico limpio devuelve vacío -> se auto-registra
+        tabla.select.return_value.ilike.return_value.limit.return_value.execute.return_value.data = []
+
+        folio = db.crear_reporte(
+            ticket="TK-101",
+            tecnico="Miguel Lopez Mina San Dimas",
+            ubicacion="Nivel 10",
+            actividad="Prueba FK",
+            estado="Terminado",
+        )
+        self.assertEqual(folio, "#055")
 
 
 if __name__ == "__main__":

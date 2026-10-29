@@ -113,9 +113,8 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
 
     # Flujo de Admin: Alta de nuevo técnico
     if estado.esperando == "admin_nombre_tecnico":
-        partes = [p.strip() for p in texto_limpio.split("|")]
-        nombre_nuevo = partes[0]
-        proyecto_nuevo = partes[1] if len(partes) > 1 else ""
+        nombre_nuevo, proy_det = db.separar_nombre_y_proyecto(texto_limpio)
+        proyecto_nuevo = proy_det if proy_det != "Ambos" else ""
         try:
             if proyecto_nuevo:
                 codigo = db.agregar_tecnico(nombre_nuevo, proyecto=proyecto_nuevo)
@@ -433,9 +432,8 @@ def procesar_mensaje_web(tecnico: str, texto: str) -> list[str]:
             return respuestas
         args = texto_limpio.removeprefix("/nuevo_tecnico").strip() if t_norm.startswith("/nuevo_tecnico") else ""
         if args:
-            partes = [p.strip() for p in args.split("|")]
-            nombre_nuevo = partes[0]
-            proyecto_nuevo = partes[1] if len(partes) > 1 else "Ambos"
+            nombre_nuevo, proy_det = db.separar_nombre_y_proyecto(args)
+            proyecto_nuevo = proy_det
             try:
                 codigo = db.agregar_tecnico(nombre_nuevo, proyecto=proyecto_nuevo)
                 if not codigo:
